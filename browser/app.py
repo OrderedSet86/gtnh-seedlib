@@ -30,12 +30,26 @@ TIC_PIECES = {"ComponentToolWorkshop", "ComponentSmeltery"}
 
 # ---------------------------------------------------------------- data loading
 
-def find_corpora():
-    """{label: tarball path} for every version folder in the repo."""
+def find_versions():
+    """{version folder: [tarball paths]} — one entry per pack version; a version
+    may hold several corpus runs (100 seeds, 500 seeds, …) that get merged."""
     out = {}
     for tar in sorted(REPO.glob("gtnh-*/*.tar.gz")):
-        out[f"{tar.parent.name}  ({tar.name})"] = str(tar)
+        out.setdefault(tar.parent.name, []).append(str(tar))
     return out
+
+
+def load_version(tar_paths):
+    """Merge every corpus run of ONE pack version (never merge across versions —
+    reports don't transfer). Per-tarball parses stay cached; on duplicate seeds
+    the newest file (mtime) wins, so a superseding rerun replaces its precursor."""
+    mats, by_seed = {}, {}
+    for p in sorted(tar_paths, key=lambda p: Path(p).stat().st_mtime):
+        m, seeds = load_corpus(p, Path(p).stat().st_mtime)
+        mats = m or mats
+        for s in seeds:
+            by_seed[s["seed"]] = s
+    return mats, list(by_seed.values())
 
 
 def _parse_villages(villages):
@@ -110,9 +124,10 @@ def ore_thing(m, mats):
 
 
 @st.cache_data
-def all_things(tar_path, mtime):
-    """Every queryable 'thing': chest item names + ore materials."""
-    mats, seeds = load_corpus(tar_path, mtime)
+def all_things(tar_key):
+    """Every queryable 'thing': chest item names + ore materials. tar_key is a
+    tuple of (path, mtime) pairs — the mtimes bust the cache on corpus updates."""
+    mats, seeds = load_version([p for p, _ in tar_key])
     things = set()
     for s in seeds:
         for chest in s["chests"]:
@@ -197,20 +212,21 @@ def best_cluster(sites, reqs, spawn, max_spawn_dist, cluster_radius):
 
 # ------------------------------------------------------------------------ UI
 
-def render_sidebar(corpora):
+def render_sidebar(versions):
     with st.sidebar:
         st.title("gtnh-seedlib")
-        label = st.selectbox("Corpus", list(corpora))
-        tar_path = corpora[label]
+        label = st.selectbox("Pack version", list(versions))
+        tars = versions[label]
         try:
-            mats, seeds = load_corpus(tar_path, Path(tar_path).stat().st_mtime)
+            mats, seeds = load_version(tars)
         except tarfile.ReadError:
             st.error("Not a valid tarball — likely a git-LFS pointer file. "
                      "Run `git lfs pull` in the repo.")
             st.stop()
-        st.caption(f"{len(seeds)} seeds · window radius 15 chunks (~240 blocks) "
-                   "around spawn, plus the generated fringe beyond it · "
-                   "distances are horizontal (x, z)")
+        st.caption(f"{len(seeds)} seeds merged from {len(tars)} corpus "
+                   f"file{'s' if len(tars) != 1 else ''} · window radius 15 "
+                   "chunks (~240 blocks) around spawn, plus the generated fringe "
+                   "beyond it · distances are horizontal (x, z)")
         complete_only = st.checkbox("Exclude partially-generated chunks", value=False)
         st.caption("Fringe chunks marked `populated: false` never ran their own "
                    "decoration pass — they only hold ores/chests spilled over from "
@@ -223,7 +239,8 @@ def render_sidebar(corpora):
                       "chunks": [c for c in s["chunks"] if c["populated"]],
                       "chests": [c for c in s["chests"] if c["populated"]]}
                      for s in seeds]
-    return tar_path, mats, seeds
+    tar_key = tuple(sorted((p, Path(p).stat().st_mtime) for p in tars))
+    return tar_key, mats, seeds
 
 
 def render_overview(seeds, mats, things):
@@ -414,13 +431,13 @@ def render_detail(seeds, mats):
 def main():
     st.set_page_config(page_title="gtnh-seedlib browser", layout="wide",
                        initial_sidebar_state="expanded")
-    corpora = find_corpora()
-    if not corpora:
+    versions = find_versions()
+    if not versions:
         st.error("No corpora found — expected gtnh-*/**.tar.gz next to browser/. "
                  "If tarballs are 3-line pointer files, run `git lfs pull`.")
         st.stop()
-    tar_path, mats, seeds = render_sidebar(corpora)
-    things = all_things(tar_path, Path(tar_path).stat().st_mtime)
+    tar_key, mats, seeds = render_sidebar(versions)
+    things = all_things(tar_key)
 
     tab_overview, tab_query, tab_detail = st.tabs(
         ["Seed overview", "Cluster query", "Seed detail"])
