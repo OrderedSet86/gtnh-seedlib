@@ -82,14 +82,16 @@ def load_corpus(tar_path, mtime):
             chunks = []
             for key, c in search.get("chunks", {}).items():
                 cx, cz = map(int, key.split(","))
+                pop = c.get("populated", True)
                 chunks.append({"cx": cx, "cz": cz, "biome": c.get("biome", "?"),
                                "water": c.get("water", 0), "clay": c.get("clay", 0),
+                               "populated": pop,
                                "ores": {int(k): v for k, v in c.get("ores", {}).items()}})
                 for chest in c.get("chests", []):
                     items = [(it.get("name") or f'{it["id"]}:{it["d"]}', it["n"])
                              for it in chest.get("items", [])]
                     chests.append({"pos": chest["pos"], "type": chest.get("type", "?"),
-                                   "items": items})
+                                   "populated": pop, "items": items})
             seeds.append({
                 "seed": d["seed"],
                 "spawn": search.get("spawn", [0, 0, 0]),
@@ -207,7 +209,20 @@ def render_sidebar(corpora):
                      "Run `git lfs pull` in the repo.")
             st.stop()
         st.caption(f"{len(seeds)} seeds · window radius 15 chunks (~240 blocks) "
-                   "around spawn · distances are horizontal (x, z)")
+                   "around spawn, plus the generated fringe beyond it · "
+                   "distances are horizontal (x, z)")
+        complete_only = st.checkbox("Exclude partially-generated chunks", value=False)
+        st.caption("Fringe chunks marked `populated: false` never ran their own "
+                   "decoration pass — they only hold ores/chests spilled over from "
+                   "finished neighbors. Their data is real but incomplete: fine "
+                   "when hunting for things, misleading when the *absence* of "
+                   "something matters (e.g. \"no copper near spawn\"). Tick this "
+                   "to count complete chunks only.")
+        if complete_only:
+            seeds = [{**s,
+                      "chunks": [c for c in s["chunks"] if c["populated"]],
+                      "chests": [c for c in s["chests"] if c["populated"]]}
+                     for s in seeds]
     return tar_path, mats, seeds
 
 
