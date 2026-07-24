@@ -1,19 +1,20 @@
-# Seed library: GTNH 2.8.4 — 100-seed corpus
+# Seed library: GTNH 2.8.4 — 100-seed corpus (r2)
 
-`seedlib-0.4-gtnh2.8.4-100seeds.tar.gz` — probe `search=true` reports (radius 15,
-nohash) for the 100 random seeds in the gtnh-determinism repo's
-`seedlib/gtnh-2.8.4-seeds-100.txt`, plus `gtmats.json`. Generated 2026-07-24.
+`seedlib-0.4-gtnh2.8.4-100seeds-r2.tar.gz` — probe `search=true` reports (radius 15,
+nohash, **all loaded chunks**: the 31x31 walk window plus every cascade-generated
+chunk, ~1100-1200 chunks/seed) for the 100 random seeds in the gtnh-determinism
+repo's `seedlib/gtnh-2.8.4-seeds-100.txt`, plus `gtmats.json`. Generated 2026-07-24.
 
 - pack: GT_New_Horizons_2.8.4_Server_Java_17-25.zip
 - fix jar: gtnhdeterminism 0.4 (md5 044d86ca21f8596775be3250d0579add)
-- probe jar: worldgenprobe v0.4-main.8+8ea6292 (md5 f714944a8d92cd187a5eaa52d5d583b1)
-- run mode: CRIU pool restores — certified cold-equivalent (image certification:
-  4 ref seeds byte-identical vs true cold; this batch spot-checked by re-running
-  seed -9090024975407965874, byte-identical).
+- probe jar: worldgenprobe v0.4-main.11+6056faa (md5 6bbb4899985277a9a3a24ed8898cc8d6)
+- run mode: CRIU pool restores — certified cold-equivalent; every seed verified a
+  strict superset of the r1 window-only corpus on stable fields.
 
-An earlier warm-mode corpus was **withdrawn** (spawn-preload chests rolled
-post-TooMuchLoot loot tables; fixed in probe 0.6). This corpus was regenerated on
-the CRIU pool, which never had that bug.
+**r2 supersedes r1** (same seeds, same worldgen): r1 reported only the fixed 31x31
+window; r2 keeps every generated chunk — corpus-wide that recovered 18,494 extra
+chunks and 1,512 additional chests. Chunks outside the walk window may carry
+`"populated": false` = partial data (see the repo README's Report format section).
 
 Routing notes for 2.8.4 (differ from 2.7.4 — reports do NOT transfer across pack
 versions):
@@ -23,4 +24,9 @@ versions):
   pre-ServerStarting loot table (fewer GT ingots, no stainless/aluminium entries);
   chests generated outside the spawn preload use the full table.
 - Run-noise between any two runs: TiC tool NBT, flowing-water counts, ore-TE
-  histograms. Compare chests on (id, damage, count) only.
+  histograms, and clay counts in swamp-type biomes. Compare chests on
+  (id, damage, count) only.
+- Known fix-jar 0.4 residual: rarely, one deep Roguelike-dungeon chest's EXISTENCE
+  is launch-dependent (write race; in this corpus: one chest on seed
+  7066592863814697627 at (101, 63, 196)). Treat deep-dungeon single chests as
+  probable, not promised.

@@ -21,7 +21,7 @@ gtnh-2.7.4/
   seedlib-0.4-60seeds.tar.gz             # 60-seed corpus
 gtnh-2.8.4/
   README.md
-  seedlib-0.4-gtnh2.8.4-100seeds.tar.gz  # 100-seed corpus
+  seedlib-0.4-gtnh2.8.4-100seeds-r2.tar.gz  # 100-seed corpus (all loaded chunks)
 ```
 
 Each tarball extracts flat:
@@ -34,7 +34,9 @@ seed-<seed>.json     # one report per seed, e.g. seed-5584831682639266804.json
 ## Report format
 
 Each `seed-<seed>.json` is one generated world, walked out to `radius` chunks
-around spawn (currently 15, a 31x31-chunk window):
+around spawn (currently 15, a 31x31-chunk window) — plus every chunk that worldgen
+cascade-generated beyond the walk (nothing generated is discarded), typically ~1100
+chunks total:
 
 ```jsonc
 {
@@ -70,6 +72,14 @@ Keyed by chunk coordinates (`blockX >> 4`):
   "chests": [ ... ]           // present only if the chunk has loot chests
 }
 ```
+
+Chunks outside the walk window additionally carry `"populated": false` when their
+own decoration pass had not run: they hold terrain plus whatever decoration spilled
+over from populated neighbors (1.7.10 decorates at a +8,+8 offset), so their
+ore/chest data is *partial*. Treat them as "at least this much", never as a
+definitive zero. Fully-walked window chunks are complete; in rare cases a window
+chunk also carries the flag — that is a real, deterministic 1.7.10 decoration hole
+(cascade re-entrancy skipped that chunk's decoration pass), faithfully reported.
 
 **Decoding ore m-values** (GT5u 1.7.10 metadata):
 
@@ -119,6 +129,26 @@ Tinker's Construct houses, `ComponentVillageApothecary`/`ComponentVillageWitchHu
 Witchery, `ComponentVillageBeeHouse` = Forestry, `ComponentWorkshop` = Railcraft
 (not TiC!), `House1`/`Church`/`Field1`/… = vanilla.
 
+## Browser
+
+A Streamlit app in [`browser/`](browser/) reads the tarballs in place (no
+extraction) and serves the corpora at `http://localhost:8501`:
+
+```
+browser/run.sh        # needs uv; or: pip install -r browser/requirements.txt
+                      #              && streamlit run browser/app.py
+```
+
+- **Seed overview** — one row per seed (water, clay, chests, villages, TiC
+  house, witchery, top biomes, plus per-item total columns); click a column
+  header to sort.
+- **Cluster query** — "at least N of thing A, B, C within Y blocks of spawn
+  and within Z blocks of each other", over both chest loot (by display name)
+  and GT ores (`Ore: <material>`, counted per chunk); chest y-range filter
+  for surface/dungeon splits.
+- **Seed detail** — full biome/ore/chest/village/witchery breakdown of one
+  seed, everything sorted by distance from spawn.
+
 ## Querying
 
 Quick start, no tooling — total surface steel in one seed:
@@ -164,6 +194,7 @@ $ seedsearch/ingot-hunt.py totals . --items steel --y-min 64 --top 3
   structure types, Roguelike loot, and more — that nondeterminism is what the jar
   fixes.
 - The window is finite (radius 15 ≈ 240 blocks); a "0" total means none *in the
-  window*, not none in the world.
+  window*, not none in the world. Chunks flagged `"populated": false` have partial
+  data (see Report format) — filter them out of anything that needs exact counts.
 - Version-specific loot facts (e.g. 2.8.4 village chests holding GT ingots, the
   spawn-window dungeon-chest loot-table quirk) live in each version folder's README.
