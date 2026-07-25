@@ -38,3 +38,15 @@ versions):
   is launch-dependent (write race; in this corpus: one chest on seed
   7066592863814697627 at (101, 63, 196)). Treat deep-dungeon single chests as
   probable, not promised.
+
+- `seedlib-0.5pre-gtnh2.8.4-99seeds-fmt2.tar.gz` — fourth batch, **report format 2**
+  (per-height histograms, sand/gravel, hardened clay, terrain heightmap/burial depths,
+  eldritch sites), 99 seeds (`gtnh-2.8.4-seeds-100c.txt` in gtnh-determinism; seed
+  9082145801287029604 omitted — it crashes stock 2.8.4 world creation, an upstream
+  GTNH bug fixed in later dailies, so it is unroutable and was dropped).
+  Fix jar 0.5pre (md5 caddf9f0e0db564966d5983bede6a14f: session loot drift F7,
+  per-chunk structure slicing for Roguelike + Witchery walls, seeded big-tree sizes),
+  probe worldgenprobe-v0.4-main.20+43ffbd534b (md5 4f5a43cd5f7d1ff6aeaacdde4182b0aa),
+  CRIU pool. NOTE: 0.5 slicing canonicalizes different dungeon layouts and adds
+  generation-time village walls vs the 0.4 corpora above — same seed numbers would
+  not produce comparable worlds across jar versions.
