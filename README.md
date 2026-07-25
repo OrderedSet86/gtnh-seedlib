@@ -23,6 +23,7 @@ gtnh-2.8.4/
   README.md
   seedlib-0.4-gtnh2.8.4-100seeds-r2.tar.gz  # 100-seed corpus (all loaded chunks)
   seedlib-0.4-gtnh2.8.4-500seeds.tar.gz     # 500-seed corpus, disjoint seeds
+  seedlib-0.4-gtnh2.8.4-100seeds-b3.tar.gz  # 100-seed corpus (batch 3), disjoint seeds
 ```
 
 Each tarball extracts flat:
