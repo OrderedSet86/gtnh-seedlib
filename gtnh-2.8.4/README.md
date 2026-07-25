@@ -50,3 +50,17 @@ versions):
   CRIU pool. NOTE: 0.5 slicing canonicalizes different dungeon layouts and adds
   generation-time village walls vs the 0.4 corpora above — same seed numbers would
   not produce comparable worlds across jar versions.
+
+- `seedlib-0.5pre-gtnh2.8.4-300seeds-coke-funnel.tar.gz` — **FUNNELED corpus, NOT a
+  random sample** (md5 078a8eb32266337bc18e60dc2ae2ce36): the top 300 coke%-ranked
+  survivors of a 650,000-seed stage-0 prefilter sweep (worldless village piece
+  layouts + spawn prediction + terrain digest, gtnh-determinism `scripts/prefilter.sh`,
+  sweep spec `random:650000:45`; ranking rules: Photoshop/TiC/blacksmith pieces all
+  in ONE village within 100 blocks of spawn, plus deep-sand/water/clay criteria —
+  `seedsearch/coke-rank.py`). Use for ROUTING CANDIDATES only; never draw loot or
+  worldgen statistics from it — these seeds were selected for exceptional spawns by
+  construction, use the random corpora above for statistics. Same jars, run mode and
+  format 2 as the fmt2 batch: fix 0.5pre (caddf9f0), probe main.20 (4f5a43cd), CRIU
+  pool, radius 15. Seed list `gtnh-2.8.4-seeds-300-coke-funnel.txt` in
+  gtnh-determinism (stage-0 rank order); the stage-0 sweep JSONL and combined
+  stage-0/1 loot rankings live in gtnh-determinism `results/2026-07-26-*`.
