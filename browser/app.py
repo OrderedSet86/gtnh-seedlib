@@ -6,6 +6,8 @@ provides:
   - a sortable per-seed overview table (click column headers to sort),
   - a cluster query tab: ">= N of thing A, B, C within Y blocks of spawn and
     within Z blocks of each other" over chest loot and GT ores,
+  - a coke% category tab ranking seeds by summed quota distances over the
+    criteria of the coke-oven speedrun route,
   - a per-seed detail view (biomes, veins, chests, villages, witchery).
 
 Launch: browser/run.sh  (or: uv run --with-requirements browser/requirements.txt \
@@ -13,14 +15,27 @@ Launch: browser/run.sh  (or: uv run --with-requirements browser/requirements.txt
 """
 import json
 import math
+import pickle
 import re
 import tarfile
 from collections import Counter
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+
+try:  # ~6x faster tarball parse; stdlib json is a fine fallback
+    import orjson
+    _loads = orjson.loads
+except ImportError:
+    _loads = json.loads
+
+# Parsed-corpus disk cache: canonical data stays in the LFS tarballs; the parsed
+# form is pickled here keyed by (tarball name, mtime), so only the first load of
+# a new corpus pays the JSON parse. Safe to delete anytime.
+CACHE_DIR = Path.home() / ".cache" / "gtnh-seedlib"
 
 REPO = Path(__file__).resolve().parent.parent
 PIECE_RE = re.compile(r'(\w+)@(-?\d+),(-?\d+),(-?\d+)\.\.(-?\d+),(-?\d+),(-?\d+)')
@@ -64,7 +79,9 @@ def _parse_villages(villages):
         cx = sum((b[0] + b[3]) / 2 for b in boxes) / len(boxes)
         cz = sum((b[2] + b[5]) / 2 for b in boxes) / len(boxes)
         out.append({"pieces": len(pieces), "cx": cx, "cz": cz,
-                    "names": Counter(names)})
+                    "names": Counter(names),
+                    "parts": [(n, (b[0] + b[3]) / 2, (b[2] + b[5]) / 2)
+                              for n, b in zip(names, boxes)]})
     return out
 
 
@@ -79,7 +96,12 @@ def _parse_witchery(witchery):
 
 @st.cache_data(show_spinner="Loading corpus…")
 def load_corpus(tar_path, mtime):
-    """Parse a seedlib tarball into (mats, [seed records]). mtime busts the cache."""
+    """Parse a seedlib tarball into (mats, [seed records]). mtime busts both the
+    in-session cache and the on-disk pickle of the parsed form."""
+    disk = CACHE_DIR / f"{Path(tar_path).name}-{int(mtime)}.pkl"
+    if disk.exists():
+        with open(disk, "rb") as f:
+            return pickle.load(f)
     mats, seeds = {}, []
     with tarfile.open(tar_path, "r:gz") as tf:
         members = {m.name: m for m in tf.getmembers() if m.isfile()}
@@ -91,30 +113,88 @@ def load_corpus(tar_path, mtime):
             base = Path(name).name
             if not (base.startswith("seed-") and base.endswith(".json")):
                 continue
-            d = json.load(tf.extractfile(m))
+            d = _loads(tf.extractfile(m).read())
+            fmt = d.get("format", 1)  # pre-versioning corpora carry no field
             search = d.get("search", {})
             chests = []
-            chunks = []
+            surf_by_chunk = {}
+            # Chunk data is columnar (numpy) — per-chunk dicts made the parsed
+            # pickle reconstruct millions of objects and dominated load time.
+            cols = {k: [] for k in ("cx", "cz", "water", "clay", "sand",
+                                    "gravel", "hclay", "populated", "code")}
+            biome_names = []
+            biome_idx = {}
+            surf_list = []
+            ores = []  # (chunk idx, m-value, count) triplets -> parallel arrays
             for key, c in search.get("chunks", {}).items():
                 cx, cz = map(int, key.split(","))
                 pop = c.get("populated", True)
-                chunks.append({"cx": cx, "cz": cz, "biome": c.get("biome", "?"),
-                               "water": c.get("water", 0), "clay": c.get("clay", 0),
-                               "populated": pop,
-                               "ores": {int(k): v for k, v in c.get("ores", {}).items()}})
+                surf = bytes.fromhex(c["surf"]) if "surf" in c else None
+                if surf is not None:
+                    surf_by_chunk[(cx, cz)] = surf
+                b = c.get("biome", "?")
+                if b not in biome_idx:
+                    biome_idx[b] = len(biome_names)
+                    biome_names.append(b)
+                idx = len(cols["cx"])
+                cols["cx"].append(cx)
+                cols["cz"].append(cz)
+                cols["water"].append(c.get("water", 0))
+                cols["clay"].append(c.get("clay", 0))
+                cols["sand"].append(c.get("sand", 0))
+                cols["gravel"].append(c.get("gravel", 0))
+                cols["hclay"].append(c.get("hardenedclay", 0)
+                                     + sum(c.get("stainedclay", {}).values()))
+                cols["populated"].append(pop)
+                cols["code"].append(biome_idx[b])
+                surf_list.append(surf)
+                for k, v in c.get("ores", {}).items():
+                    ores.append((idx, int(k), v))
                 for chest in c.get("chests", []):
                     items = [(it.get("name") or f'{it["id"]}:{it["d"]}', it["n"])
                              for it in chest.get("items", [])]
                     chests.append({"pos": chest["pos"], "type": chest.get("type", "?"),
                                    "populated": pop, "items": items})
+            chunks = {
+                "n": len(cols["cx"]),
+                "cx": np.array(cols["cx"], dtype=np.int32),
+                "cz": np.array(cols["cz"], dtype=np.int32),
+                "water": np.array(cols["water"], dtype=np.int32),
+                "clay": np.array(cols["clay"], dtype=np.int32),
+                "sand": np.array(cols["sand"], dtype=np.int32),
+                "gravel": np.array(cols["gravel"], dtype=np.int32),
+                "hclay": np.array(cols["hclay"], dtype=np.int32),
+                "populated": np.array(cols["populated"], dtype=bool),
+                "code": np.array(cols["code"], dtype=np.uint16),
+                "biome_names": biome_names,
+                # one blob, 256 bytes/chunk (zeros = no heightmap for that chunk)
+                "surf": (b"".join(s or bytes(256) for s in surf_list)
+                         if any(s is not None for s in surf_list) else b""),
+                "ores_idx": np.array([t[0] for t in ores], dtype=np.int32),
+                "ores_m": np.array([t[1] for t in ores], dtype=np.int32),
+                "ores_n": np.array([t[2] for t in ores], dtype=np.int32),
+            }
+            # burial depth = local terrain height minus chest y (format >= 2 only)
+            for chest in chests:
+                x, y, z = chest["pos"]
+                surf = surf_by_chunk.get((x >> 4, z >> 4))
+                chest["depth"] = surf[(z & 15) * 16 + (x & 15)] - y if surf else None
             seeds.append({
                 "seed": d["seed"],
+                "format": fmt,
                 "spawn": search.get("spawn", [0, 0, 0]),
                 "chunks": chunks,
                 "chests": chests,
                 "villages": _parse_villages(d.get("villages", [])),
                 "witchery": _parse_witchery(d.get("witchery", [])),
             })
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    for stale in CACHE_DIR.glob(f"{Path(tar_path).name}-*.pkl"):
+        stale.unlink()
+    tmp = disk.with_suffix(".tmp")
+    with open(tmp, "wb") as f:
+        pickle.dump((mats, seeds), f, protocol=pickle.HIGHEST_PROTOCOL)
+    tmp.rename(disk)
     return mats, seeds
 
 
@@ -133,8 +213,8 @@ def all_things(tar_key):
     for s in seeds:
         for chest in s["chests"]:
             things.update(name for name, _ in chest["items"])
-        for c in s["chunks"]:
-            things.update(ore_thing(m, mats) for m in c["ores"])
+        things.update(ore_thing(int(m), mats)
+                      for m in np.unique(s["chunks"]["ores_m"]))
     return sorted(things)
 
 
@@ -150,6 +230,15 @@ def tp(x, y, z):
     """1.7.10 teleport command. y=None keeps current height (~); chest callers
     pass y+1 so you land on top of the block, not inside it."""
     return f"/tp {round(x)} {'~' if y is None else round(y)} {round(z)}"
+
+
+def chest_is_surface(chest, max_depth=2, y_min=64):
+    """Format >= 2 reports carry real burial depth (terrain height - chest y,
+    slime-island aware); older corpora fall back to the y >= 64 sea-level guess,
+    which miscalls buried chests under hills — regenerate for exact answers."""
+    if chest.get("depth") is not None:
+        return chest["depth"] <= max_depth
+    return chest["pos"][1] >= y_min
 
 
 # ---------------------------------------------------------------- query engine
@@ -171,14 +260,15 @@ def seed_sites(s, mats, wanted, y_min, y_max):
                 counts[name] += n
         if counts:
             sites.append((x, z, y, "chest", counts))
-    for c in s["chunks"]:
-        counts = Counter()
-        for m, n in c["ores"].items():
-            t = ore_thing(m, mats)
-            if t in wanted:
-                counts[t] += n
-        if counts:
-            sites.append((c["cx"] * 16 + 8, c["cz"] * 16 + 8, None, "ore chunk", counts))
+    ch = s["chunks"]
+    by_chunk = {}
+    for idx, m, n in zip(ch["ores_idx"], ch["ores_m"], ch["ores_n"]):
+        t = ore_thing(int(m), mats)
+        if t in wanted:
+            by_chunk.setdefault(int(idx), Counter())[t] += int(n)
+    for idx, counts in by_chunk.items():
+        sites.append((int(ch["cx"][idx]) * 16 + 8, int(ch["cz"][idx]) * 16 + 8,
+                      None, "ore chunk", counts))
     return sites
 
 
@@ -211,12 +301,228 @@ def best_cluster(sites, reqs, spawn, max_spawn_dist, cluster_radius):
             "spawn_dist": dist2d(cx, cz, sx, sz)}
 
 
+# -------------------------------------------------------------- category engine
+
+# What the reports can and can't see for coke%: water/clay are per-chunk BLOCK
+# counts; sand/gravel blocks are NOT recorded (sand is proxied by Desert/Beach
+# biome chunks, gravel not at all — but chest Flint is counted, and flint is
+# what the GTNH furnace recipe needs). Furnaces are TileEntityFurnace TEs.
+MARSH_ITEM = "Dezil's Marshmallow"
+FURNACE_TYPES = {"TileEntityFurnace"}
+SMITHY_PIECE = "House2"          # vanilla blacksmith
+# Smelt value in coal units (coal smelts 8 items). Any "... Planks" item also
+# counts via PLANK_FUEL.
+FUEL_VALUES = {"Coal": 1.0, "Charcoal": 1.0, "Coal Coke": 2.0, "Block of Coal": 9.0}
+PLANK_FUEL = 0.1875
+# TiC head materials considered run-viable by default — editable in the UI.
+# Corpus fact (2.8.4): metal heads (Bronze/Iron/Obsidian/Electrum/Pig Iron/
+# Queen's Gold) appear ONLY in dungeon loot below y 50; surface chests hold
+# Flint/Bone/Stone (and Cactus/Wooden at y 50-63). With the surface filter on,
+# Flint is the best head a route can pick up.
+GOOD_HEAD_DEFAULT = ["Flint", "Cactus", "Bone",
+                     "Bronze", "Obsidian", "Electrum", "Queen's Gold",
+                     "Iron", "Pig Iron"]
+
+
+def is_sandy(biome):
+    return "Desert" in biome or "Beach" in biome
+
+
+def head_material(item_name, kind):
+    """'Bronze Shovel Head' -> 'Bronze' (kind = 'Shovel' | 'Axe'), else None."""
+    suffix = f" {kind} Head"
+    return item_name[: -len(suffix)] if item_name.endswith(suffix) else None
+
+
+def all_head_materials(seeds):
+    mats = set()
+    for s in seeds:
+        for c in s["chests"]:
+            for name, _ in c["items"]:
+                for kind in ("Shovel", "Axe"):
+                    m = head_material(name, kind)
+                    if m:
+                        mats.add(m)
+    return sorted(mats)
+
+
+def quota_dist(sites, quota):
+    """sites = [(dist, qty, x, y_or_None, z, label)]. Take nearest-first until
+    qty sums to quota; return (dist of last site needed, used sites) or None."""
+    if quota <= 0:
+        return (0.0, [])
+    got = 0
+    used = []
+    for site in sorted(sites, key=lambda t: t[0]):
+        got += site[1]
+        used.append(site)
+        if got >= quota:
+            return (site[0], used)
+    return None
+
+
+def coke_criteria(s, params):
+    """Per-criterion (quota, qty within radius, quota_dist result) for one seed.
+
+    Returns {name: {"quota", "qty", "hit": (dist, used)|None}} — 'qty' is the
+    total available inside the radius, 'hit' the nearest-first quota solution.
+    """
+    sx, _, sz = s["spawn"]
+    R = params["radius"]
+
+    def d(x, z):
+        return dist2d(x, z, sx, sz)
+
+    chest_sites = {"paper": [], "shovel": [], "axe": [], "marsh": [], "fuel": []}
+    furnaces = []
+    for c in s["chests"]:
+        x, y, z = c["pos"]
+        dist = d(x, z)
+        if dist > R:
+            continue
+        if params["surface_only"] and not chest_is_surface(c, params["max_depth"]):
+            continue
+        if c["type"] in FURNACE_TYPES:
+            furnaces.append((dist, 1, x, y, z, "furnace"))
+            continue
+        paper = shovel = axe = 0
+        marsh = 0
+        fuel = 0.0
+        for name, n in c["items"]:
+            if name == "Paper":
+                paper += n
+            elif name == MARSH_ITEM:
+                marsh += n
+            elif name in FUEL_VALUES:
+                fuel += FUEL_VALUES[name] * n
+            elif name.endswith("Planks"):
+                fuel += PLANK_FUEL * n
+            sm = head_material(name, "Shovel")
+            am = head_material(name, "Axe")
+            if sm in params["good_mats"]:
+                shovel += n
+            if am in params["good_mats"]:
+                axe += n
+        # paper quota must be met by ONE chest (a village house with >=4 paper)
+        if paper >= params["paper_per_chest"]:
+            chest_sites["paper"].append((dist, paper, x, y, z, f"{paper} paper"))
+        if shovel:
+            chest_sites["shovel"].append((dist, shovel, x, y, z,
+                                          f"{shovel} good shovel head(s)"))
+        if axe:
+            chest_sites["axe"].append((dist, axe, x, y, z,
+                                       f"{axe} good axe head(s)"))
+        if marsh:
+            chest_sites["marsh"].append((dist, marsh, x, y, z,
+                                         f"{marsh} marshmallow(s)"))
+        if fuel:
+            chest_sites["fuel"].append((dist, fuel, x, y, z,
+                                        f"{fuel:g} coal-equiv fuel"))
+
+    ch = s["chunks"]
+    xs = ch["cx"].astype(np.float64) * 16 + 8
+    zs = ch["cz"].astype(np.float64) * 16 + 8
+    dists = np.hypot(xs - sx, zs - sz)
+    near = dists <= R
+    sandy_code = np.array([is_sandy(b) for b in ch["biome_names"]], dtype=bool)
+    sandy = int(np.count_nonzero(near & sandy_code[ch["code"]]))
+
+    def chunk_sites(counts_arr, label):
+        out = []
+        for i in np.nonzero(near & (counts_arr > 0))[0]:
+            n = int(counts_arr[i])
+            out.append((float(dists[i]), n, int(xs[i]), None, int(zs[i]),
+                        f"{n} {label}"))
+        return out
+
+    water_sites = chunk_sites(ch["water"], "water")
+    clay_sites = chunk_sites(ch["clay"], "clay")
+
+    smithies = sum(1 for v in s["villages"] for name, px, pz in v["parts"]
+                   if name == SMITHY_PIECE and d(px, pz) <= R)
+
+    crit = {}
+
+    def add(name, sites, quota):
+        crit[name] = {"quota": quota, "qty": sum(t[1] for t in sites),
+                      "hit": quota_dist(sites, quota)}
+
+    # paper: quota = 1 chest that individually holds >= paper_per_chest
+    crit["paper"] = {"quota": params["paper_per_chest"],
+                     "qty": sum(t[1] for t in chest_sites["paper"]),
+                     "hit": quota_dist([(t[0], 1, *t[2:])
+                                        for t in chest_sites["paper"]], 1)}
+    add("water", water_sites, params["min_water"])
+    add("clay", clay_sites, params["min_clay"])
+    add("shovel", chest_sites["shovel"], params["min_shovel"])
+    add("axe", chest_sites["axe"], params["min_axe"])
+    add("furnaces", furnaces, params["min_furnaces"])
+    add("marsh", chest_sites["marsh"], params["min_marsh"])
+    add("fuel", chest_sites["fuel"], params["min_fuel"])
+    crit["_sandy_chunks"] = sandy
+    crit["_smithies"] = smithies
+    return crit
+
+
+CRIT_LABELS = {"paper": "paper", "water": "water", "clay": "clay",
+               "shovel": "shovel heads", "axe": "axe heads",
+               "furnaces": "furnaces", "marsh": "marshmallows", "fuel": "fuel"}
+
+
+def coke_rows(seeds, params):
+    """One summary row per seed + breakdown data, sorted best-first."""
+    out = []
+    for s in seeds:
+        crit = coke_criteria(s, params)
+        unmet = [CRIT_LABELS[k] for k in CRIT_LABELS if crit[k]["hit"] is None]
+        score = sum(crit[k]["hit"][0] for k in CRIT_LABELS if crit[k]["hit"])
+        row = {"seed": str(s["seed"]),
+               "spawn x": s["spawn"][0], "spawn z": s["spawn"][2],
+               "unmet": ", ".join(unmet) if unmet else "—",
+               "score": round(score)}
+        for k in CRIT_LABELS:
+            c = crit[k]
+            row[CRIT_LABELS[k]] = round(c["qty"], 1) if isinstance(c["qty"], float) else c["qty"]
+            row[f"{CRIT_LABELS[k]} d"] = round(c["hit"][0]) if c["hit"] else None
+        row["sandy chunks"] = crit["_sandy_chunks"]
+        row["smithies"] = crit["_smithies"]
+        out.append((len(unmet), score, row, crit, s))
+    out.sort(key=lambda t: (t[0], t[1]))
+    return out
+
+
+def _filter_chunks(ch, mask=None):
+    """Columnar chunk table filtered to `mask` (default: populated chunks)."""
+    if mask is None:
+        mask = ch["populated"]
+    keep = np.nonzero(mask)[0]
+    out = {k: v for k, v in ch.items()}
+    for k in ("cx", "cz", "water", "clay", "sand", "gravel", "hclay",
+              "populated", "code"):
+        out[k] = ch[k][mask]
+    out["n"] = len(keep)
+    if ch["surf"]:
+        out["surf"] = b"".join(ch["surf"][i * 256:(i + 1) * 256] for i in keep)
+    ore_keep = mask[ch["ores_idx"]]
+    new_idx = np.cumsum(mask) - 1  # old chunk idx -> new position
+    out["ores_idx"] = new_idx[ch["ores_idx"][ore_keep]].astype(np.int32)
+    out["ores_m"] = ch["ores_m"][ore_keep]
+    out["ores_n"] = ch["ores_n"][ore_keep]
+    return out
+
+
+def biome_counts(ch):
+    counts = np.bincount(ch["code"], minlength=len(ch["biome_names"]))
+    return Counter({b: int(n) for b, n in zip(ch["biome_names"], counts) if n})
+
+
 # ------------------------------------------------------------------------ UI
 
 def render_sidebar(versions):
     with st.sidebar:
         st.title("gtnh-seedlib")
-        label = st.selectbox("Pack version", list(versions))
+        label = st.selectbox("Pack version", list(versions),
+                             index=len(versions) - 1)
         tars = versions[label]
         try:
             mats, seeds = load_version(tars)
@@ -224,10 +530,32 @@ def render_sidebar(versions):
             st.error("Not a valid tarball — likely a git-LFS pointer file. "
                      "Run `git lfs pull` in the repo.")
             st.stop()
+        fmts = Counter(s.get("format", 1) for s in seeds)
+        fmt_txt = ", ".join(f"format {f}: {n}" for f, n in sorted(fmts.items()))
         st.caption(f"{len(seeds)} seeds merged from {len(tars)} corpus "
-                   f"file{'s' if len(tars) != 1 else ''} · window radius 15 "
-                   "chunks (~240 blocks) around spawn, plus the generated fringe "
-                   "beyond it · distances are horizontal (x, z)")
+                   f"file{'s' if len(tars) != 1 else ''} ({fmt_txt}) · window "
+                   "radius 15 chunks (~240 blocks) around spawn, plus the "
+                   "generated fringe beyond it · distances are horizontal (x, z)")
+        # format-1 seeds lack surf/sand/gravel/per-y data, so every analysis on
+        # them silently degrades to heuristics — keep them out unless asked.
+        n_fmt2 = sum(n for f, n in fmts.items() if f >= 2)
+        if min(fmts) < 2:
+            include_fmt1 = st.checkbox(
+                f"Include format 1 seeds ({fmts.get(1, 0)})",
+                value=(n_fmt2 == 0),
+                help="Format 1 corpora predate the terrain heightmap, "
+                     "sand/gravel, and per-height data: surface detection falls "
+                     "back to the y ≥ 64 sea-level guess and sand columns are "
+                     "biome proxies. Off by default so results only reflect "
+                     "full-fidelity data.")
+            if n_fmt2 == 0 and not include_fmt1:
+                st.info("This version has no format 2 corpora yet — nothing to "
+                        "show with format 1 excluded.")
+            if not include_fmt1:
+                seeds = [s for s in seeds if s.get("format", 1) >= 2]
+            else:
+                st.caption("⚠ format 1 seeds included — surface detection uses "
+                           "the y ≥ 64 sea-level guess for them.")
         complete_only = st.checkbox("Exclude partially-generated chunks", value=False)
         st.caption("Fringe chunks marked `populated: false` never ran their own "
                    "decoration pass — they only hold ores/chests spilled over from "
@@ -236,8 +564,7 @@ def render_sidebar(versions):
                    "something matters (e.g. \"no copper near spawn\"). Tick this "
                    "to count complete chunks only.")
         if complete_only:
-            seeds = [{**s,
-                      "chunks": [c for c in s["chunks"] if c["populated"]],
+            seeds = [{**s, "chunks": _filter_chunks(s["chunks"]),
                       "chests": [c for c in s["chests"] if c["populated"]]}
                      for s in seeds]
     tar_key = tuple(sorted((p, Path(p).stat().st_mtime) for p in tars))
@@ -250,17 +577,19 @@ def render_overview(seeds, mats, things):
     default_cols = [t for t in ("Steel Ingot", "Bronze Ingot") if t in things]
     thing_cols = st.multiselect("Total columns", things, default=default_cols)
     surface_only = st.checkbox(
-        "Surface chests only (y ≥ 50) for thing columns", value=False,
-        help="Roguelike dungeon loot is mostly y<50; surface ruins are y>50.")
+        "Surface chests only for thing columns", value=False,
+        help="Real burial depth on format ≥ 2 corpora; y ≥ 64 fallback on "
+             "older ones (Roguelike dungeon loot is mostly deep).")
 
     rows = []
     for s in seeds:
-        biomes = Counter(c["biome"] for c in s["chunks"])
+        ch = s["chunks"]
+        biomes = biome_counts(ch)
         row = {
             "seed": str(s["seed"]),
             "spawn x": s["spawn"][0], "spawn z": s["spawn"][2],
-            "water": sum(c["water"] for c in s["chunks"]),
-            "clay": sum(c["clay"] for c in s["chunks"]),
+            "water": int(ch["water"].sum()),
+            "clay": int(ch["clay"].sum()),
             "chests": len(s["chests"]),
             "villages": len(s["villages"]),
             "TiC house": any(has_tic_house(v) for v in s["villages"]),
@@ -270,12 +599,13 @@ def render_overview(seeds, mats, things):
         for t in thing_cols:
             total = 0
             if t.startswith("Ore"):
-                for c in s["chunks"]:
-                    total += sum(n for m, n in c["ores"].items()
-                                 if ore_thing(m, mats) == t)
+                ms = [int(m) for m in np.unique(ch["ores_m"])
+                      if ore_thing(int(m), mats) == t]
+                if ms:
+                    total = int(ch["ores_n"][np.isin(ch["ores_m"], ms)].sum())
             else:
                 for chest in s["chests"]:
-                    if surface_only and chest["pos"][1] < 50:
+                    if surface_only and not chest_is_surface(chest):
                         continue
                     total += sum(n for name, n in chest["items"] if name == t)
             row[t] = total
@@ -356,6 +686,94 @@ def render_query(seeds, mats, things):
             st.dataframe(pd.DataFrame(mem_rows), width="stretch", hide_index=True)
 
 
+def render_coke(seeds):
+    st.caption(
+        "Rank seeds for coke% (complete a coke oven). Each criterion gets a "
+        "**quota distance**: its sites are taken nearest-to-spawn-first until the "
+        "quota is met, and the cost is the distance of the last site needed. "
+        "**score = sum of quota distances** — lower is a tighter run. Seeds "
+        "missing a criterion sort below, with the misses named. Qty columns show "
+        "the total available inside the radius. Caveats: the probe records "
+        "water/clay *blocks* but not sand/gravel blocks — *sandy chunks* counts "
+        "Desert/Beach biome chunks as a sand proxy, and gravel isn't measurable "
+        "at all. *furnaces* are real TileEntityFurnace tile entities; *smithies* "
+        "counts House2 blacksmith pieces. Chest criteria only count SURFACE "
+        "chests by default (real burial depth on format ≥ 2 corpora, y ≥ 64 "
+        "fallback on older ones). Note: metal heads (Bronze/Iron/Obsidian/…) "
+        "only exist in dungeon loot below y 50; surface chests hold "
+        "Flint/Bone/Stone heads, so Flint is the best surface pickup.")
+
+    head_mats = all_head_materials(seeds)
+    good_mats = st.multiselect(
+        "Head materials that count as good (shovel/axe)", head_mats,
+        default=[m for m in GOOD_HEAD_DEFAULT if m in head_mats])
+
+    r1 = st.columns(5)
+    r2 = st.columns(5)
+    params = {
+        "radius": r1[0].number_input("Radius", 50, 2000, 240, step=10),
+        "paper_per_chest": r1[1].number_input("Paper (one chest)", 1, 64, 4),
+        "min_water": r1[2].number_input("Water blocks", 0, 10000, 300, step=50),
+        "min_clay": r1[3].number_input("Clay blocks", 0, 1000, 30, step=5,
+                                       help="104 unfired bricks need ~105 clay "
+                                            "balls ≈ 27 clay blocks."),
+        "min_furnaces": r1[4].number_input(
+            "Furnaces", 0, 50, 1,
+            help="Pre-built SURFACE furnaces are rare (only 7/700 seeds have "
+                 "4+): the run usually crafts them from cobble + flint. Sort "
+                 "by the furnaces column to find village-furnace seeds."),
+        "min_marsh": r2[0].number_input("Marshmallows", 0, 256, 16),
+        "min_fuel": r2[1].number_input("Fuel (coal-equiv)", 0, 500, 32, step=8,
+                                       help="Coal=1, Coke=2, Coal Block=9, "
+                                            "planks=0.1875 each."),
+        "min_shovel": r2[2].number_input("Shovel heads", 0, 20, 1),
+        "min_axe": r2[3].number_input("Axe heads", 0, 20, 1),
+        "max_depth": r2[4].number_input(
+            "Max burial depth", 0, 64, 2,
+            help="Blocks of terrain above the chest. Needs format ≥ 2 corpora "
+                 "(real slime-island-aware heightmap); format-1 seeds fall back "
+                 "to the y ≥ 64 sea-level guess, which miscalls chests buried "
+                 "under hills."),
+        "surface_only": st.checkbox(
+            "Surface chests only", value=True,
+            help="Dungeon detours are too slow for coke%. Applies to every "
+                 "chest-based criterion (paper, heads, marshmallows, fuel, "
+                 "furnaces)."),
+        "good_mats": set(good_mats),
+    }
+
+    ranked = coke_rows(seeds, params)
+    n_ok = sum(1 for u, _, _, _, _ in ranked if u == 0)
+    st.markdown(f"**{n_ok}** / {len(ranked)} seeds meet every quota")
+
+    st.dataframe(pd.DataFrame([r for _, _, r, _, _ in ranked]),
+                 width="stretch", height=500, hide_index=True)
+
+    st.subheader("Seed breakdown")
+    options = [r["seed"] for _, _, r, _, _ in ranked]
+    pick = st.selectbox("Seed", options, key="coke_seed")
+    _, _, row, crit, s = next(t for t in ranked if t[2]["seed"] == pick)
+    sx, sy, sz = s["spawn"]
+    st.markdown(f"Spawn **{sx}, {sy}, {sz}** · `/tp {sx} {sy} {sz}` · "
+                f"score **{row['score']}** · unmet: {row['unmet']}")
+    bd = []
+    for k, label in CRIT_LABELS.items():
+        cinfo = crit[k]
+        if cinfo["hit"]:
+            dist, used = cinfo["hit"]
+            for site in used:
+                sdist, qty, x, y, z, what = site
+                bd.append({"criterion": label, "quota": cinfo["quota"],
+                           "in radius": round(cinfo["qty"], 1),
+                           "site": what, "dist": round(sdist),
+                           "tp": tp(x, y + 1 if y is not None else None, z)})
+        else:
+            bd.append({"criterion": label, "quota": cinfo["quota"],
+                       "in radius": round(cinfo["qty"], 1),
+                       "site": "NOT MET", "dist": None, "tp": ""})
+    st.dataframe(pd.DataFrame(bd), width="stretch", hide_index=True, height=450)
+
+
 def render_detail(seeds, mats):
     seed_pick = st.selectbox("Seed", [str(s["seed"]) for s in seeds])
     s = next(x for x in seeds if str(x["seed"]) == seed_pick)
@@ -365,9 +783,10 @@ def render_detail(seeds, mats):
                "Ctrl+C to copy. Chest tps target one block above the chest; "
                "`~` keeps your current height where no y is known.")
 
+    ch = s["chunks"]
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Water", sum(c["water"] for c in s["chunks"]))
-    m2.metric("Clay", sum(c["clay"] for c in s["chunks"]))
+    m1.metric("Water", int(ch["water"].sum()))
+    m2.metric("Clay", int(ch["clay"].sum()))
     m3.metric("Chests", len(s["chests"]))
     m4.metric("Villages", len(s["villages"]))
     m5.metric("Witchery sites", len(s["witchery"]))
@@ -375,17 +794,17 @@ def render_detail(seeds, mats):
     col_l, col_r = st.columns(2)
     with col_l:
         st.subheader("Biomes")
-        biomes = Counter(c["biome"] for c in s["chunks"])
+        biomes = biome_counts(ch)
         st.dataframe(pd.DataFrame(
             [{"biome": b, "chunks": n} for b, n in biomes.most_common()]),
             width="stretch", hide_index=True)
 
         st.subheader("Ores (window total)")
         big, small = Counter(), Counter()
-        for c in s["chunks"]:
-            for m, n in c["ores"].items():
-                mat = mats.get(str(m % 1000), f"mat{m % 1000}")
-                (small if m >= 16000 else big)[mat] += n
+        for m, n in zip(ch["ores_m"], ch["ores_n"]):
+            m, n = int(m), int(n)
+            mat = mats.get(str(m % 1000), f"mat{m % 1000}")
+            (small if m >= 16000 else big)[mat] += n
         ore_rows = [{"material": mat, "big-ore blocks": big.get(mat, 0),
                      "small ores": small.get(mat, 0)}
                     for mat in sorted(set(big) | set(small),
@@ -417,8 +836,10 @@ def render_detail(seeds, mats):
             st.caption("none in window")
 
     st.subheader("Chests")
+    has_depth = any(c.get("depth") is not None for c in s["chests"])
     chest_rows = [{
         "x": c["pos"][0], "y": c["pos"][1], "z": c["pos"][2],
+        **({"buried": c["depth"]} if has_depth else {}),
         "dist from spawn": round(dist2d(c["pos"][0], c["pos"][2], sx, sz)),
         "tp": tp(c["pos"][0], c["pos"][1] + 1, c["pos"][2]),
         "type": c["type"], "stacks": len(c["items"]),
@@ -469,12 +890,14 @@ def main():
     tar_key, mats, seeds = render_sidebar(versions)
     things = all_things(tar_key)
 
-    tab_overview, tab_query, tab_detail = st.tabs(
-        ["Seed overview", "Cluster query", "Seed detail"])
+    tab_overview, tab_query, tab_coke, tab_detail = st.tabs(
+        ["Seed overview", "Cluster query", "coke%", "Seed detail"])
     with tab_overview:
         render_overview(seeds, mats, things)
     with tab_query:
         render_query(seeds, mats, things)
+    with tab_coke:
+        render_coke(seeds)
     with tab_detail:
         render_detail(seeds, mats)
 
