@@ -516,6 +516,157 @@ def biome_counts(ch):
     return Counter({b: int(n) for b, n in zip(ch["biome_names"], counts) if n})
 
 
+# ---------------------------------------------------------------- prefilter sweeps
+
+# Stage-0 prefilter JSONL sweeps (gtnh-determinism scripts/prefilter.sh) live in the
+# sibling repo's results/; auto-discovered, plus a free-path box for anything else.
+PREFILTER_RESULTS = REPO.parent / "gtnh-determinism" / "results"
+PREFILTER_CAP = 512.0
+# scoring mirrors gtnh-determinism/seedsearch/coke-rank.py (the canonical CLI ranker);
+# keep the two in sync when criteria change
+PF_CRITERIA = {
+    "paper": ("VillageComponentPhotoshop",),
+    "tic": ("ComponentToolWorkshop", "ComponentSmeltery"),
+    "furnace": ("House2",),
+}
+
+
+def find_prefilter_sweeps():
+    out = {}
+    if PREFILTER_RESULTS.is_dir():
+        for p in sorted(PREFILTER_RESULTS.glob("*/*.jsonl")):
+            out[f"{p.parent.name}/{p.name}"] = p
+    return out
+
+
+@st.cache_data(show_spinner="Parsing prefilter sweep…")
+def load_prefilter(path_str, mtime):
+    path = Path(path_str)
+    cache = CACHE_DIR / f"prefilter-{path.parent.name}-{path.name}-{int(mtime)}.pkl"
+    if cache.exists():
+        with open(cache, "rb") as f:
+            return pickle.load(f)
+    kills = Counter()
+    survivors = []
+    with open(path, "rb") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            d = _loads(line)
+            if "kill" in d:
+                kills[d["kill"]] += 1
+                continue
+            survivors.append(d)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(cache, "wb") as f:
+        pickle.dump((kills, survivors), f, protocol=pickle.HIGHEST_PROTOCOL)
+    return kills, survivors
+
+
+def prefilter_row(d, max_village_dist, furnace_bonus, water_cols, sand_cols, clay_cols):
+    """Best single village + terrain distances for one survivor (coke-rank port)."""
+    spawn = d.get("spawn")
+    if not spawn:
+        return None
+    px, pz = spawn[0], spawn[2]
+    best = None
+    for stv in d.get("village_starts", []):
+        vd = {crit: PREFILTER_CAP for crit in PF_CRITERIA}
+        edge, houses = None, 0
+        for m in PIECE_RE.finditer(stv.get("pieces", "")):
+            x1, _, z1, x2, _, z2 = (int(g) for g in m.groups()[1:])
+            dx = max(min(x1, x2) - px, 0, px - max(x1, x2))
+            dz = max(min(z1, z2) - pz, 0, pz - max(z1, z2))
+            dist = math.hypot(dx, dz)
+            edge = dist if edge is None else min(edge, dist)
+            if m.group(1) == "House2":
+                houses += 1
+            for crit, names in PF_CRITERIA.items():
+                if m.group(1) in names:
+                    vd[crit] = min(vd[crit], dist)
+        if edge is None or edge > max_village_dist:
+            continue
+        vscore = sum(vd.values()) - furnace_bonus * max(0, houses - 1)
+        cx, cz = stv.get("c", [0, 0])
+        if best is None or vscore < best[0]:
+            best = (vscore, (cx * 16 + 2, cz * 16 + 2), vd, houses)
+    if best is None:
+        return None
+    vscore, well, vd, houses = best
+    t = {"water": PREFILTER_CAP, "sand": PREFILTER_CAP, "clay": PREFILTER_CAP}
+    for row in d.get("terrain", []):
+        center = math.hypot(row[0] * 16 + 8 - px, row[1] * 16 + 8 - pz)
+        if row[2] >= water_cols:
+            t["water"] = min(t["water"], center)
+        if len(row) >= 7 and row[5] >= sand_cols:
+            t["sand"] = min(t["sand"], center)
+        if len(row) >= 9 and row[7] >= clay_cols:
+            t["clay"] = min(t["clay"], center)
+    return {
+        "score": round(vscore + t["water"] + t["sand"] + t["clay"]),
+        "seed": d["seed"],
+        "spawn": f"{px},{pz}",
+        "village": f"{well[0]},{well[1]}",
+        "paper": round(vd["paper"]), "tic": round(vd["tic"]),
+        "furnace": round(vd["furnace"]), "furn_houses": houses,
+        "water": round(t["water"]), "sand": round(t["sand"]), "clay": round(t["clay"]),
+        "tp spawn": tp(px, None, pz), "tp village": tp(well[0], None, well[1]),
+    }
+
+
+def render_prefilter():
+    sweeps = find_prefilter_sweeps()
+    st.caption("Stage-0 worldless prefilter sweeps (gtnh-determinism "
+               "`scripts/prefilter.sh`). Layout/terrain predictions only — chest "
+               "loot, marshmallows and heads need the stage-1 reports.")
+    col_a, col_b = st.columns([2, 2])
+    with col_a:
+        choice = st.selectbox("Sweep", list(sweeps) or ["(none found)"])
+    with col_b:
+        custom = st.text_input("…or JSONL path", "")
+    path = Path(custom).expanduser() if custom else sweeps.get(choice)
+    if not path or not Path(path).is_file():
+        st.info("No sweep selected. Expected *.jsonl under "
+                f"{PREFILTER_RESULTS} or an explicit path above.")
+        return
+    kills, survivors = load_prefilter(str(path), Path(path).stat().st_mtime)
+
+    total = sum(kills.values()) + len(survivors)
+    cols = st.columns(len(kills) + 2)
+    cols[0].metric("Seeds", f"{total:,}")
+    for i, (k, v) in enumerate(sorted(kills.items()), start=1):
+        cols[i].metric(f"killed: {k}", f"{v:,}")
+    cols[-1].metric("Survivors", f"{len(survivors):,}")
+
+    with st.expander("Scoring parameters (mirrors seedsearch/coke-rank.py)"):
+        c1, c2, c3, c4, c5 = st.columns(5)
+        max_vd = c1.slider("Max village dist", 25, 512, 100,
+                           help="village eligible only if its nearest piece is "
+                                "within this many blocks of spawn")
+        fbonus = c2.slider("Furnace-house bonus", 0, 100, 25)
+        wcols = c3.slider("Water cols/chunk", 1, 64, 16)
+        scols = c4.slider("Deep-sand cols/chunk", 1, 32, 4)
+        ccols = c5.slider("Clay-cand cols/chunk", 1, 64, 8)
+        require_all = st.checkbox("Require paper+tic+furnace in the village", True)
+
+    rows = []
+    for d in survivors:
+        r = prefilter_row(d, max_vd, fbonus, wcols, scols, ccols)
+        if r is None:
+            continue
+        if require_all and any(r[k] >= PREFILTER_CAP for k in ("paper", "tic", "furnace")):
+            continue
+        rows.append(r)
+    rows.sort(key=lambda r: r["score"])
+    st.write(f"**{len(rows)}** seeds pass the current village rules")
+    if rows:
+        df = pd.DataFrame(rows)
+        st.dataframe(df, width="stretch", height=560, hide_index=True)
+        st.download_button("Download CSV", df.to_csv(index=False),
+                           file_name=f"{Path(path).parent.name}-ranked.csv")
+
+
 # ------------------------------------------------------------------------ UI
 
 def render_sidebar(versions):
@@ -890,14 +1041,16 @@ def main():
     tar_key, mats, seeds = render_sidebar(versions)
     things = all_things(tar_key)
 
-    tab_overview, tab_query, tab_coke, tab_detail = st.tabs(
-        ["Seed overview", "Cluster query", "coke%", "Seed detail"])
+    tab_overview, tab_query, tab_coke, tab_prefilter, tab_detail = st.tabs(
+        ["Seed overview", "Cluster query", "coke%", "Prefilter", "Seed detail"])
     with tab_overview:
         render_overview(seeds, mats, things)
     with tab_query:
         render_query(seeds, mats, things)
     with tab_coke:
         render_coke(seeds)
+    with tab_prefilter:
+        render_prefilter()
     with tab_detail:
         render_detail(seeds, mats)
 
