@@ -1,15 +1,17 @@
-# Seed library: GTNH 2.8.4 — 600 seeds across two corpora
+# Seed library: GTNH 2.8.4 — 700 seeds across three corpora
 
 Probe `search=true` reports (radius 15, nohash, **all loaded chunks**: the 31x31
 walk window plus every cascade-generated chunk, ~1100-1200 chunks/seed), generated
 2026-07-24. Seed lists live in the gtnh-determinism repo's `seedlib/`; the two
 corpora are disjoint — the browser and the query tools can use them together
-(600 seeds total).
+(700 seeds total).
 
 - `seedlib-0.4-gtnh2.8.4-100seeds-r2.tar.gz` — first batch, 100 seeds
   (`gtnh-2.8.4-seeds-100.txt`)
 - `seedlib-0.4-gtnh2.8.4-500seeds.tar.gz` — second batch, 500 seeds
   (`gtnh-2.8.4-seeds-500.txt`); 500/500 clean, spot-check re-run byte-identical
+- `seedlib-0.4-gtnh2.8.4-100seeds-b3.tar.gz` — third batch, 100 seeds
+  (`gtnh-2.8.4-seeds-100b.txt`); 100/100 clean, spot-check re-run byte-identical
 
 - pack: GT_New_Horizons_2.8.4_Server_Java_17-25.zip
 - fix jar: gtnhdeterminism 0.4 (md5 044d86ca21f8596775be3250d0579add)
