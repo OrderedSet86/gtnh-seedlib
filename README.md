@@ -22,6 +22,7 @@ gtnh-2.7.4/
 gtnh-2.8.4/
   README.md
   seedlib-0.4-gtnh2.8.4-100seeds-r2.tar.gz  # 100-seed corpus (all loaded chunks)
+  seedlib-0.4-gtnh2.8.4-500seeds.tar.gz     # 500-seed corpus, disjoint seeds
 ```
 
 Each tarball extracts flat:
@@ -136,7 +137,8 @@ extraction) and serves the corpora at `http://localhost:8501`:
 
 ```
 browser/run.sh        # needs uv; or: pip install -r browser/requirements.txt
-                      #              && streamlit run browser/app.py
+                      #              && (cd browser && streamlit run app.py)
+                      # launch from browser/ so .streamlit/config.toml applies
 ```
 
 - **Seed overview** — one row per seed (water, clay, chests, villages, TiC

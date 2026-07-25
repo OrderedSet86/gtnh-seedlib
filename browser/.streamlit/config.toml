@@ -1,0 +1,8 @@
+# Hide the developer toolbar and its bare-key hotkeys ('c' = clear cache,
+# 'r' = rerun) — 'c' collides with copying cells out of the tables.
+# Streamlit reads this from CWD, so launch from browser/ (run.sh does).
+[client]
+toolbarMode = "viewer"
+
+[browser]
+gatherUsageStats = false

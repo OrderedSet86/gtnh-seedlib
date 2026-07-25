@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 REPO = Path(__file__).resolve().parent.parent
 PIECE_RE = re.compile(r'(\w+)@(-?\d+),(-?\d+),(-?\d+)\.\.(-?\d+),(-?\d+),(-?\d+)')
@@ -428,9 +429,38 @@ def render_detail(seeds, mats):
                  height=500)
 
 
+def disable_bare_hotkeys():
+    """Streamlit binds bare 'c' (clear cache) and 'r' (rerun) whenever focus is
+    outside an input — 'c' collides with copying cells out of the tables.
+    toolbarMode="viewer" in .streamlit/config.toml removes them the supported
+    way; this capture-phase guard is the belt-and-suspenders for dev mode.
+    Modified keys (Ctrl+C) and keys typed into widgets pass through untouched.
+    """
+    components.html(
+        """
+        <script>
+        const doc = window.parent.document;
+        if (!doc.__seedlibHotkeyGuard) {
+            doc.__seedlibHotkeyGuard = true;
+            doc.addEventListener("keydown", (e) => {
+                if (e.key !== "c" && e.key !== "r") return;
+                if (e.ctrlKey || e.metaKey || e.altKey) return;
+                const t = e.target;
+                if (t && t.closest && t.closest(
+                        "input, textarea, [contenteditable='true'], " +
+                        "[data-testid='stDataFrame'], [role='grid']")) return;
+                e.stopImmediatePropagation();
+            }, true);
+        }
+        </script>
+        """,
+        height=0)
+
+
 def main():
     st.set_page_config(page_title="gtnh-seedlib browser", layout="wide",
                        initial_sidebar_state="expanded")
+    disable_bare_hotkeys()
     versions = find_versions()
     if not versions:
         st.error("No corpora found — expected gtnh-*/**.tar.gz next to browser/. "
