@@ -518,8 +518,10 @@ def biome_counts(ch):
 
 # ---------------------------------------------------------------- prefilter sweeps
 
-# Stage-0 prefilter JSONL sweeps (gtnh-determinism scripts/prefilter.sh) live in the
-# sibling repo's results/; auto-discovered, plus a free-path box for anything else.
+# Stage-0 prefilter JSONL sweeps (gtnh-determinism scripts/prefilter.sh). Published
+# sweeps ship in THIS repo as gtnh-*/prefilter-*.tar.gz (git LFS) and are read
+# straight from the tarball; the sibling repo's results/ is only scanned as a
+# convenience for local, not-yet-published sweeps, plus a free-path box.
 PREFILTER_RESULTS = REPO.parent / "gtnh-determinism" / "results"
 PREFILTER_CAP = 512.0
 # scoring mirrors gtnh-determinism/seedsearch/coke-rank.py (the canonical CLI ranker);
@@ -531,24 +533,53 @@ PF_CRITERIA = {
 }
 
 
+@st.cache_data
+def _tar_jsonl_members(tar_str, mtime):
+    """.jsonl member names inside a prefilter tarball (mtime busts the cache).
+    Listing a .tar.gz decompresses the whole stream — hence the cache."""
+    with tarfile.open(tar_str, "r:gz") as tf:
+        return [m.name for m in tf.getmembers()
+                if m.isfile() and m.name.endswith(".jsonl")]
+
+
 def find_prefilter_sweeps():
+    """{label: source}. Source is either "<tarball>::<member>" for published
+    sweeps in this repo (the normal case) or a plain path for local, not-yet-
+    published sweeps in the sibling gtnh-determinism results/ (dev machines)."""
     out = {}
+    for t in sorted(REPO.glob("gtnh-*/prefilter-*.tar.gz")):
+        try:
+            for name in _tar_jsonl_members(str(t), t.stat().st_mtime):
+                out[f"{t.parent.name}/{t.name} :: {name}"] = f"{t}::{name}"
+        except tarfile.ReadError:
+            pass  # LFS pointer file — surfaced by the corpus loader already
     if PREFILTER_RESULTS.is_dir():
         for p in sorted(PREFILTER_RESULTS.glob("*/*.jsonl")):
-            out[f"{p.parent.name}/{p.name}"] = p
+            out[f"local: {p.parent.name}/{p.name}"] = str(p)
     return out
 
 
+def _sweep_mtime(src):
+    return Path(str(src).split("::", 1)[0]).stat().st_mtime
+
+
+def _sweep_exists(src):
+    return Path(str(src).split("::", 1)[0]).is_file() if src else False
+
+
 @st.cache_data(show_spinner="Parsing prefilter sweep…")
-def load_prefilter(path_str, mtime):
-    path = Path(path_str)
-    cache = CACHE_DIR / f"prefilter-{path.parent.name}-{path.name}-{int(mtime)}.pkl"
+def load_prefilter(src, mtime):
+    """src = plain JSONL path, or "<tarball>::<member>" for in-repo sweeps."""
+    tar_path, _, member = str(src).partition("::")
+    path = Path(tar_path)
+    cache = CACHE_DIR / (f"prefilter-{path.parent.name}-{path.name}-"
+                         f"{Path(member).name or 'file'}-{int(mtime)}.pkl")
     if cache.exists():
         with open(cache, "rb") as f:
             return pickle.load(f)
-    kills = Counter()
-    survivors = []
-    with open(path, "rb") as f:
+
+    def parse(f):
+        kills, survivors = Counter(), []
         for line in f:
             line = line.strip()
             if not line:
@@ -558,6 +589,14 @@ def load_prefilter(path_str, mtime):
                 kills[d["kill"]] += 1
                 continue
             survivors.append(d)
+        return kills, survivors
+
+    if member:
+        with tarfile.open(tar_path, "r:gz") as tf:
+            kills, survivors = parse(tf.extractfile(member))
+    else:
+        with open(path, "rb") as f:
+            kills, survivors = parse(f)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     with open(cache, "wb") as f:
         pickle.dump((kills, survivors), f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -625,12 +664,13 @@ def render_prefilter():
         choice = st.selectbox("Sweep", list(sweeps) or ["(none found)"])
     with col_b:
         custom = st.text_input("…or JSONL path", "")
-    path = Path(custom).expanduser() if custom else sweeps.get(choice)
-    if not path or not Path(path).is_file():
-        st.info("No sweep selected. Expected *.jsonl under "
-                f"{PREFILTER_RESULTS} or an explicit path above.")
+    src = str(Path(custom).expanduser()) if custom else sweeps.get(choice)
+    if not _sweep_exists(src):
+        st.info("No sweep selected. Expected prefilter-*.tar.gz in this repo's "
+                f"version folders (run `git lfs pull`), *.jsonl under "
+                f"{PREFILTER_RESULTS}, or an explicit path above.")
         return
-    kills, survivors = load_prefilter(str(path), Path(path).stat().st_mtime)
+    kills, survivors = load_prefilter(src, _sweep_mtime(src))
 
     total = sum(kills.values()) + len(survivors)
     cols = st.columns(len(kills) + 2)
