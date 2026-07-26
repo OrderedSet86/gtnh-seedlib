@@ -62,5 +62,21 @@ versions):
   construction, use the random corpora above for statistics. Same jars, run mode and
   format 2 as the fmt2 batch: fix 0.5pre (caddf9f0), probe main.20 (4f5a43cd), CRIU
   pool, radius 15. Seed list `gtnh-2.8.4-seeds-300-coke-funnel.txt` in
-  gtnh-determinism (stage-0 rank order); the stage-0 sweep JSONL and combined
-  stage-0/1 loot rankings live in gtnh-determinism `results/2026-07-26-*`.
+  gtnh-determinism (stage-0 rank order).
+
+- `prefilter-0.5pre-gtnh2.8.4-650k-coke-sweep.tar.gz` — the **stage-0 prefilter
+  data** behind the funnel corpus (md5 of members as packaged 2026-07-25):
+  - `sweep.jsonl` — one line per swept seed (650,000): either
+    `{"seed", "kill": "<gate>"}` for gate rejects or the full worldless digest
+    (predicted spawn, village positions + piece layouts, terrain digest).
+    Gates used: village within 12 chunks, Photoshop+ToolWorkshop+Smeltery
+    pieces, water ≥ 32 (`run.sh` in the tarball is the exact pipeline).
+  - `finalists-r8.jsonl` — the 858 rank-pass-1 survivors re-digested at terrain
+    radius 8 for honest sand/clay/water distances out to ~136 blocks.
+  - `rank-pass1.txt` / `rank-final.txt` / `finalists-ranked.txt` — coke-rank.py
+    outputs; `top100.txt` / `next200.txt` — the stage-1 selection lists.
+  - `combined-stage01.csv` — combined stage-0/1 loot rankings for the 300
+    funneled seeds (score = stage-0 + stage-1 quota distances).
+  Worldless digests come from the prefilter's in-JVM piece replay — layouts are
+  exact, but there is NO loot/terrain-block data in stage 0; that is what the
+  funneled stage-1 corpus above adds.

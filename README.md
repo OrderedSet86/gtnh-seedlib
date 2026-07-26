@@ -24,6 +24,9 @@ gtnh-2.8.4/
   seedlib-0.4-gtnh2.8.4-100seeds-r2.tar.gz  # 100-seed corpus (all loaded chunks)
   seedlib-0.4-gtnh2.8.4-500seeds.tar.gz     # 500-seed corpus, disjoint seeds
   seedlib-0.4-gtnh2.8.4-100seeds-b3.tar.gz  # 100-seed corpus (batch 3), disjoint seeds
+  seedlib-0.5pre-gtnh2.8.4-99seeds-fmt2.tar.gz       # format-2 corpus, 0.5pre jar
+  seedlib-0.5pre-gtnh2.8.4-300seeds-coke-funnel.tar.gz  # FUNNELED top-300 (not random!)
+  prefilter-0.5pre-gtnh2.8.4-650k-coke-sweep.tar.gz  # stage-0 sweep data behind the funnel
 ```
 
 Each tarball extracts flat:
