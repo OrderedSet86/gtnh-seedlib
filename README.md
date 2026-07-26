@@ -35,6 +35,20 @@ seed-<seed>.json     # one report per seed, e.g. seed-5584831682639266804.json
 
 ## Report format
 
+**Format versions.** Each report carries a top-level `"format": N`; reports
+without the field are format 1. Corpora are never regenerated in place — a new
+probe format means a new tarball alongside the old ones, and the browser reads
+both (feature-detecting per seed, falling back where a field is missing, e.g.
+surface detection degrades to the y ≥ 64 sea-level guess on format 1). History:
+
+- **1** — water/clay totals, ores, chests, villages, witchery, `populated` flag.
+- **2** — adds `sand`/`gravel` totals, `waterY`/`clayY`/`sandY`/`gravelY`
+  per-height histograms (sparse `{y: count}`), `hardenedclay` +
+  `stainedclay{meta: count}`, and `surf`: a 16×16 terrain heightmap per chunk
+  (512 hex chars, row-major `z*16+x`, one byte per column) that ignores
+  vegetation and floating slime islands — chest burial depth = `surf` at the
+  chest column minus chest y.
+
 Each `seed-<seed>.json` is one generated world, walked out to `radius` chunks
 around spawn (currently 15, a 31x31-chunk window) — plus every chunk that worldgen
 cascade-generated beyond the walk (nothing generated is discarded), typically ~1100
@@ -149,6 +163,12 @@ browser/run.sh        # needs uv; or: pip install -r browser/requirements.txt
   and within Z blocks of each other", over both chest loot (by display name)
   and GT ores (`Ore: <material>`, counted per chunk); chest y-range filter
   for surface/dungeon splits.
+- **coke%** — category ranking for the coke-oven speedrun: each route
+  criterion (village paper chest, water, clay, TiC shovel/axe heads, furnaces,
+  Dezil's Marshmallows, chest fuel) gets a nearest-first *quota distance*;
+  seeds are ranked by the summed distances, with per-seed breakdowns and tp
+  commands. Sand is proxied by Desert/Beach biome chunks (the reports don't
+  count sand/gravel blocks).
 - **Seed detail** — full biome/ore/chest/village/witchery breakdown of one
   seed, everything sorted by distance from spawn.
 
