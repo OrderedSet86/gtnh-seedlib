@@ -704,7 +704,7 @@ def render_prefilter():
         df = pd.DataFrame(rows)
         st.dataframe(df, width="stretch", height=560, hide_index=True)
         st.download_button("Download CSV", df.to_csv(index=False),
-                           file_name=f"{Path(path).parent.name}-ranked.csv")
+                           file_name=f"{Path(src).parent.name}-ranked.csv")
 
 
 # ------------------------------------------------------------------------ UI
