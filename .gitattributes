@@ -1,1 +1,15 @@
 *.tar.gz filter=lfs diff=lfs merge=lfs -text
+
+# Route-map bundles under worlds/<seed>/. These patterns are deliberately glob-based rather
+# than per-seed, so adding a world costs nothing here -- worldgen changes every pack version,
+# so there will be one bundle per seed per version.
+#
+# Rasters are binary and regenerable. loot.json is ~1.6 MB of minified single-line JSON: it
+# would be stored as text, but a one-line file does not produce a useful diff, so every
+# rebuild would append a fresh 1.6 MB blob to history for no reviewable benefit.
+worlds/**/*.png filter=lfs diff=lfs merge=lfs -text
+worlds/**/loot.json filter=lfs diff=lfs merge=lfs -text
+
+# meta.json, palette.json, pois.json and veins.json stay as text on purpose: they are small,
+# and being able to read a bundle's provenance and counts in a diff is worth more than the
+# bytes. The builder writes them one record per line so that diff is actually legible.

@@ -26,6 +26,8 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
+import lootscore
+
 try:  # ~6x faster tarball parse; stdlib json is a fine fallback
     import orjson
     _loads = orjson.loads
@@ -262,9 +264,17 @@ def seed_sites(s, mats, wanted, y_min, y_max):
             sites.append((x, z, y, "chest", counts))
     ch = s["chunks"]
     by_chunk = {}
-    for idx, m, n in zip(ch["ores_idx"], ch["ores_m"], ch["ores_n"]):
+    # ~18k ore rows per seed but only a handful of distinct m-values: resolve
+    # names once per m, and keep only the wanted ones (the whole script reruns
+    # on every widget change, so this loop is on the interactive path).
+    keep = {}
+    for m in np.unique(ch["ores_m"]):
         t = ore_thing(int(m), mats)
         if t in wanted:
+            keep[int(m)] = t
+    for idx, m, n in zip(ch["ores_idx"], ch["ores_m"], ch["ores_n"]):
+        t = keep.get(int(m))
+        if t is not None:
             by_chunk.setdefault(int(idx), Counter())[t] += int(n)
     for idx, counts in by_chunk.items():
         sites.append((int(ch["cx"][idx]) * 16 + 8, int(ch["cz"][idx]) * 16 + 8,
@@ -524,6 +534,14 @@ def biome_counts(ch):
 # convenience for local, not-yet-published sweeps, plus a free-path box.
 PREFILTER_RESULTS = REPO.parent / "gtnh-determinism" / "results"
 PREFILTER_CAP = 512.0
+# Chest-bearing sweeps are large (a radius-60 run is ~1 MB/seed) and are staged outside the
+# Dropbox-synced tree, so the loot tabs scan the working cache too. Missing dirs are skipped.
+SWEEP_ROOTS = [PREFILTER_RESULTS, Path.home() / ".cache" / "gtnh-determinism"]
+# The Prefilter tab's ranker parses an entire sweep — it has to, it ranks every survivor. Anything
+# past this never appears in its picker, because selecting one is an unbounded wait with a spinner
+# that looks identical to normal work. The loot tabs read a bounded number of lines and use
+# find_chest_sweeps() instead, which has no such limit.
+PREFILTER_MAX_BYTES = 512 * 1024 * 1024
 # scoring mirrors gtnh-determinism/seedsearch/coke-rank.py (the canonical CLI ranker);
 # keep the two in sync when criteria change
 PF_CRITERIA = {
@@ -555,7 +573,39 @@ def find_prefilter_sweeps():
             pass  # LFS pointer file — surfaced by the corpus loader already
     if PREFILTER_RESULTS.is_dir():
         for p in sorted(PREFILTER_RESULTS.glob("*/*.jsonl")):
-            out[f"local: {p.parent.name}/{p.name}"] = str(p)
+            if p.stat().st_size <= PREFILTER_MAX_BYTES:
+                out[f"local: {p.parent.name}/{p.name}"] = str(p)
+    return out
+
+
+def find_chest_sweeps():
+    """Sweeps for the loot tabs, which read a bounded number of lines and so can afford the big
+    chest-bearing runs the Prefilter tab must not touch.
+
+    Kept separate from find_prefilter_sweeps deliberately. That tab's ranker parses a whole sweep to
+    rank every survivor, so listing a multi-GB file there is a guaranteed hang; here the seed limit
+    caps the read. Files are deduplicated by content size+line-count-free heuristic: a combined
+    sweep and the per-batch parts it was concatenated from are the same data, and offering both is
+    just a way to pick the slow one by accident.
+    """
+    out = {}
+    for root in SWEEP_ROOTS:
+        if not root.is_dir():
+            continue
+        for p in sorted(root.glob("*/*.jsonl")):
+            out[f"{p.parent.name}/{p.name}"] = str(p)
+    return out
+
+
+def find_value_tables():
+    """{label: path} for item-value CSVs shipped beside the corpora, plus any in the sibling
+    repo's results/ on a dev machine. These seed the editor; the edited copy is what scores."""
+    out = {}
+    for root in [REPO] + SWEEP_ROOTS:
+        if not root.is_dir():
+            continue
+        for p in sorted(root.glob("*/value-table*.csv")):
+            out[f"{p.parent.name}/{p.name}"] = str(p)
     return out
 
 
@@ -654,6 +704,24 @@ def prefilter_row(d, max_village_dist, furnace_bonus, water_cols, sand_cols, cla
     }
 
 
+@st.cache_data(show_spinner="Ranking survivors…", max_entries=8)
+def prefilter_rank(src, mtime, max_vd, fbonus, wcols, scols, ccols, require_all):
+    """Score every survivor. Cached: a sweep has tens of thousands of them, and
+    Streamlit reruns the whole script (all tabs) on any widget change — without
+    this, picking a seed in the detail tab pays for the prefilter tab."""
+    _, survivors = load_prefilter(src, mtime)
+    rows = []
+    for d in survivors:
+        r = prefilter_row(d, max_vd, fbonus, wcols, scols, ccols)
+        if r is None:
+            continue
+        if require_all and any(r[k] >= PREFILTER_CAP for k in ("paper", "tic", "furnace")):
+            continue
+        rows.append(r)
+    rows.sort(key=lambda r: r["score"])
+    return pd.DataFrame(rows)
+
+
 def render_prefilter():
     sweeps = find_prefilter_sweeps()
     st.caption("Stage-0 worldless prefilter sweeps (gtnh-determinism "
@@ -690,18 +758,10 @@ def render_prefilter():
         ccols = c5.slider("Clay-cand cols/chunk", 1, 64, 8)
         require_all = st.checkbox("Require paper+tic+furnace in the village", True)
 
-    rows = []
-    for d in survivors:
-        r = prefilter_row(d, max_vd, fbonus, wcols, scols, ccols)
-        if r is None:
-            continue
-        if require_all and any(r[k] >= PREFILTER_CAP for k in ("paper", "tic", "furnace")):
-            continue
-        rows.append(r)
-    rows.sort(key=lambda r: r["score"])
-    st.write(f"**{len(rows)}** seeds pass the current village rules")
-    if rows:
-        df = pd.DataFrame(rows)
+    df = prefilter_rank(src, _sweep_mtime(src), max_vd, fbonus, wcols, scols,
+                        ccols, require_all)
+    st.write(f"**{len(df)}** seeds pass the current village rules")
+    if len(df):
         st.dataframe(df, width="stretch", height=560, hide_index=True)
         st.download_button("Download CSV", df.to_csv(index=False),
                            file_name=f"{Path(src).parent.name}-ranked.csv")
@@ -758,8 +818,22 @@ def render_sidebar(versions):
             seeds = [{**s, "chunks": _filter_chunks(s["chunks"]),
                       "chests": [c for c in s["chests"] if c["populated"]]}
                      for s in seeds]
+        st.divider()
+        n_all = len(seeds)
+        limit = st.number_input(
+            "Seed limit", min_value=0, value=100, step=50,
+            help="Cap how many seeds every tab looks at, so tinkering with a metric costs seconds "
+                 "instead of minutes. 0 = no limit. Seeds are taken in corpus order, which is "
+                 "arbitrary but stable, so a limited run is a fair sample — but it is a SAMPLE: "
+                 "'best of 100' is not 'best of 500'. Raise it before trusting a ranking.")
+        if limit and limit < n_all:
+            seeds = seeds[:limit]
+            st.caption(f"⚠ using {len(seeds)} of {n_all} seeds — rankings are best-of-"
+                       f"{len(seeds)}, not best-of-{n_all}.")
+        else:
+            st.caption(f"using all {n_all} seeds")
     tar_key = tuple(sorted((p, Path(p).stat().st_mtime) for p in tars))
-    return tar_key, mats, seeds
+    return tar_key, mats, seeds, int(limit)
 
 
 def render_overview(seeds, mats, things):
@@ -1069,6 +1143,583 @@ def disable_bare_hotkeys():
         height=0)
 
 
+# ------------------------------------------------------- loot scoring (item value table)
+
+@st.cache_data(show_spinner="Reading sweep…", max_entries=4)
+def load_sweep_chests(src, mtime, limit):
+    """Stage-0 sweep -> [(seed, spawn, [(source, category, pos, items, y_nominal)])].
+
+    Tuples rather than objects because this is pickled by the cache. Records with no `spawn` are
+    dropped and counted: Prefilter only computes the spawn point when the terrain digest is on
+    (PREFILTER_TERRAIN >= 0), and without it every window would be centred on the origin instead —
+    a wrong answer rather than a missing one.
+    """
+    records, kills = lootscore.read_jsonl_records(src, limit)
+    out, no_spawn = [], 0
+    for d in records:
+        if not d.get("spawn"):
+            no_spawn += 1
+            continue
+        out.append((d["seed"], d["spawn"],
+                    [(c.source, c.category, c.pos, c.items, c.y_nominal)
+                     for c in lootscore.chests_from_prefilter(d)]))
+    return out, dict(kills), no_spawn
+
+
+def _rehydrate(rows):
+    return [lootscore.Chest(*r) for r in rows]
+
+
+TOP_SCORER = "(top scorer)"
+
+DEFAULT_TABLE = pd.DataFrame(
+    [{"Item": "Alumite Large Plate", "Value": 10000.0, "Limit": 2, "Min": None},
+     {"Item": "Steel Ingot", "Value": 100.0, "Limit": None, "Min": None},
+     {"Item": "Bronze Ingot", "Value": 30.0, "Limit": None, "Min": None}])
+
+
+def tall_table(df, height):
+    """A dataframe that actually uses the fullscreen canvas.
+
+    st.dataframe with a pixel height keeps that height when expanded, so fullscreening a 420 px
+    table just puts 11 rows on a large empty page. A fixed-height container gives normal flow its
+    size, and height="stretch" lets the table fill whatever it is given — including the fullscreen
+    viewport.
+    """
+    with st.container(height=height):
+        st.dataframe(df, width="stretch", height="stretch", hide_index=True)
+
+
+def set_value_base(df, origin):
+    """Replace the BASE table — the imported CSV, not the edited view.
+
+    Bumps a version counter that is part of the editor's widget key. st.data_editor keeps its own
+    per-key state, so handing it a different frame under an unchanged key is ignored and a preset
+    load appears to do nothing; a new key is what makes the swap stick, and it also discards the
+    stale row-indexed edit deltas that would otherwise land on the wrong rows of the new table.
+    """
+    df = df.copy()
+    for col in ("Value", "Limit", "Min"):
+        if col not in df:
+            df[col] = None
+    df["Value"] = pd.to_numeric(df["Value"], errors="coerce")
+    df = df.sort_values("Value", ascending=False, na_position="last")
+    df = df[["Item", "Value", "Limit", "Min"]]
+    st.session_state["vt_base"] = df.reset_index(drop=True)
+    st.session_state["vt_origin"] = origin
+    st.session_state["_vt_ver"] = st.session_state.get("_vt_ver", 0) + 1
+
+
+def _vt_key(df):
+    """{normalised item: (value, limit)} for diffing base against the edited view."""
+    out = {}
+    for r in df.to_dict("records"):
+        item = str(r.get("Item") or "").strip()
+        if not item:
+            continue
+        out[lootscore.norm(item)] = (lootscore.clean(item), r.get("Value"),
+                                     r.get("Limit"), r.get("Min"))
+    return out
+
+
+def _same(a, b):
+    if a is None or b is None or (isinstance(a, float) and a != a) or (isinstance(b, float) and b != b):
+        return (a is None or (isinstance(a, float) and a != a)) and \
+               (b is None or (isinstance(b, float) and b != b))
+    try:
+        return float(a) == float(b)
+    except (TypeError, ValueError):
+        return str(a) == str(b)
+
+
+def value_table_diff(base, current):
+    """Hand edits since import, as rows. Kept as a derived view rather than tracked incrementally so
+    it cannot drift from what is actually being scored."""
+    b, c = _vt_key(base), _vt_key(current)
+    rows = []
+    for k in c.keys() - b.keys():
+        rows.append({"change": "added", "item": c[k][0], "field": "", "from": "", "to": ""})
+    for k in b.keys() - c.keys():
+        rows.append({"change": "removed", "item": b[k][0], "field": "",
+                     "from": f"value {b[k][1]}", "to": ""})
+    for k in b.keys() & c.keys():
+        for i, field in ((1, "Value"), (2, "Limit"), (3, "Min")):
+            if not _same(b[k][i], c[k][i]):
+                rows.append({"change": "edited", "item": c[k][0], "field": field,
+                             "from": b[k][i], "to": c[k][i]})
+    rows.sort(key=lambda r: (r["change"], str(r["item"])))
+    return rows
+
+
+def value_table_editor():
+    """The single editable copy of the scoring metric.
+
+    Two frames, deliberately: `vt_base` is what was imported and is never written back to, and the
+    editor's return value is the live view. Feeding the return value back into the editor's own
+    input — the obvious thing — makes Streamlit re-apply its row-indexed deltas on top of already
+    edited data, which reverts cells and duplicates added rows. `vt_current` is published for the
+    Baseline tab, which runs later in the same script pass and so sees this run's edits, not the
+    previous run's.
+    """
+    tables = find_value_tables()
+    col_a, col_b = st.columns([3, 2])
+    with col_a:
+        preset = st.selectbox("Load a table", ["(keep current)"] + list(tables), index=0,
+                              help="Loading replaces the table and discards hand edits.")
+    with col_b:
+        upload = st.file_uploader("…or upload a CSV", type="csv",
+                                  help="Columns Item, Value, Limit. Extra columns are ignored.")
+
+    def from_rows(rows, origin):
+        set_value_base(pd.DataFrame(
+            [{"Item": r.get("Item"), "Value": r.get("Value"), "Limit": r.get("Limit"),
+               "Min": r.get("Min")}
+             for r in rows if (r.get("Item") or "").strip()]), origin)
+
+    if upload is not None and st.session_state.get("_vt_upload") != upload.name:
+        from_rows(lootscore.value_rows_from_csv(upload.getvalue().decode("utf-8", "replace")),
+                  f"upload: {upload.name}")
+        st.session_state["_vt_upload"] = upload.name
+    elif preset != "(keep current)" and st.session_state.get("_vt_preset") != preset:
+        from_rows(lootscore.value_rows_from_csv(Path(tables[preset]).read_text(encoding="utf-8")),
+                  preset)
+        st.session_state["_vt_preset"] = preset
+    if "vt_base" not in st.session_state:
+        set_value_base(DEFAULT_TABLE.copy(), "built-in starter table")
+
+    base = st.session_state["vt_base"]
+    height = st.select_slider("Editor height", [280, 420, 560, 760, 1000], value=560,
+                              help="Rows are sorted by value at import. The editor cannot re-sort "
+                                   "as you type — use the button below to fold edits in and re-sort.")
+    edited = st.data_editor(
+        base, key=f"vt_editor_{st.session_state.get('_vt_ver', 0)}", num_rows="dynamic",
+        width="stretch", height=height,
+        column_config={
+            "Item": st.column_config.TextColumn("Item", help="In-game display name, as the probe "
+                                                             "records it. Colour codes are stripped "
+                                                             "on both sides before matching."),
+            "Value": st.column_config.NumberColumn("Value", format="%.4g"),
+            "Limit": st.column_config.NumberColumn(
+                "Limit", help="Hard cap on the quantity of this item that counts toward one seed. "
+                              "Blank = uncapped."),
+            "Min": st.column_config.NumberColumn(
+                "Min", help="Requirement, not a score term: a seed holding fewer than this many is "
+                            "dropped from the ranking entirely. Checked against the raw quantity, "
+                            "not the capped one. Blank = no requirement."),
+        })
+    st.session_state["vt_current"] = edited
+
+    values, limits, mins, display, problems = lootscore.parse_value_rows(edited.to_dict("records"))
+    for p in problems:
+        st.warning(p)
+
+    diff = value_table_diff(base, edited)
+    origin = st.session_state.get("vt_origin", "?")
+    with st.expander(f"Hand edits since import — {len(diff)} "
+                     f"({origin})", expanded=bool(diff)):
+        if diff:
+            st.dataframe(pd.DataFrame(diff), width="stretch", hide_index=True,
+                         height=min(400, 40 + 35 * len(diff)))
+        else:
+            st.caption("None — the table is exactly as imported.")
+
+    c1, c2, c3 = st.columns(3)
+    if c1.button("Fold edits in and re-sort", disabled=not diff,
+                 help="Makes the current view the new base, sorted by value. The edit list resets "
+                      "to empty because there is no longer anything to compare against."):
+        set_value_base(edited, f"{origin} + {len(diff)} hand edits")
+        st.rerun()
+    if c2.button("Discard hand edits", disabled=not diff):
+        st.session_state["_vt_ver"] = st.session_state.get("_vt_ver", 0) + 1
+        st.rerun()
+    c3.download_button("Download as CSV", edited.to_csv(index=False), "value-table.csv", "text/csv")
+    return values, limits, mins, display
+
+
+def loot_source_picker(seeds, seed_limit, key):
+    """-> (label, [(seed, spawn, [Chest])], default_radius, warning_or_None)."""
+    sweeps = find_chest_sweeps()
+    choices = ["Corpus (full generation)"] + [f"Sweep: {k}" for k in sweeps]
+    pick = st.selectbox("Chest source", choices, key=f"{key}_src",
+                        help="The corpus is full generation and sees every chest source. A stage-0 "
+                             "sweep sees Roguelike dungeon and village chests only, but can cover a "
+                             "far wider radius. Only the first N seeds of a sweep are read, where N "
+                             "is the sidebar seed limit.")
+    if pick.startswith("Corpus"):
+        data = [(s["seed"], s["spawn"], lootscore.chests_from_corpus(s)) for s in seeds]
+        return pick, data, 15, None
+    name = pick[len("Sweep: "):]
+    src = sweeps[name]
+    # Scoring a sweep over a wider window than it was generated with quietly invents a different
+    # answer: chests past its own radius are simply not in the file, so seeds look poorer for a
+    # reason that has nothing to do with the seed. The generation radius is in the filename by
+    # convention (…-r60.jsonl); honour it when present.
+    m = re.search(r"-r(\d+)\b", name)
+    gen_radius = int(m.group(1)) if m else 60
+    if not _sweep_exists(src):
+        return pick, [], gen_radius, "Sweep file is missing."
+    rows, kills, no_spawn = load_sweep_chests(src, _sweep_mtime(src), seed_limit)
+    size = Path(str(src).split("::", 1)[0]).stat().st_size
+    st.caption(f"read {len(rows)} seeds"
+               + (f" (sidebar limit {seed_limit})" if seed_limit else " (no limit)")
+               + f" from a {size / 1e9:.2f} GB file · "
+               + (f"{sum(kills.values())} killed by gates" if kills else "no gate kills")
+               + (f" · generated at radius {gen_radius}" if m else
+                  " · generation radius unknown (not in the filename) — defaulting to 60"))
+    warn = None
+    if no_spawn:
+        warn = (f"{no_spawn} records carry no spawn point, so their window would be centred on the "
+                f"origin. Re-run that sweep with PREFILTER_TERRAIN >= 0.")
+    elif rows and not any(r[2] for r in rows):
+        warn = ("This sweep contains no chests. It was run without "
+                "-Dprobe.prefilter.villagechests / -Dprobe.prefilter.dungeon, so every seed will "
+                "score 0 — that is the input file, not the seeds.")
+    return pick, [(s, sp, _rehydrate(ch)) for s, sp, ch in rows], gen_radius, warn
+
+
+def score_all(data, radius, values, limits, mins, display):
+    """-> (rows, qty_by_seed, marginals, rejected). One pass, shared by the tables below.
+
+    Seeds failing a Min requirement are held back rather than scored, and the failures are counted
+    per requirement so an empty ranking says which bar was too high instead of looking like a bad
+    corpus.
+    """
+    rows, qty_by_seed, marg, rejected = [], {}, [], Counter()
+    for seed, spawn, chests in data:
+        scoped = lootscore.in_scope(chests, spawn, radius)
+        score, uncapped, marginals, qty = lootscore.score_seed(scoped, values, limits)
+        unmet = lootscore.unmet_minimums(qty, mins)
+        if unmet:
+            for key, need, _got in unmet:
+                rejected[f"{display.get(key, key)} ≥ {need}"] += 1
+            continue
+        by_src = Counter(c.source for c in scoped)
+        rows.append({"score": round(score, 2), "seed": seed,
+                     "uncapped": round(uncapped, 2),
+                     "capped away": round(uncapped - score, 2),
+                     "chests": len(scoped),
+                     **{f"{k} chests": v for k, v in sorted(by_src.items())},
+                     "spawn": f"{spawn[0]},{spawn[2]}",
+                     "tp spawn": tp(spawn[0], None, spawn[2])})
+        qty_by_seed[seed] = qty
+        marg.extend((earned, seed, chest) for earned, _, chest in marginals if earned > 0)
+    rows.sort(key=lambda r: -r["score"])
+    marg.sort(key=lambda t: -t[0])
+    return rows, qty_by_seed, marg, rejected
+
+
+def render_loot(seeds, seed_limit):
+    st.caption("Score seeds by chest contents against an item value table. "
+               "`score = Σ value × min(quantity, limit)` over every chest inside the window. "
+               "The table below is the single copy of the metric — the Baseline rates tab reads "
+               "the same one.")
+    label, data, default_r, warn = loot_source_picker(seeds, seed_limit, "loot")
+    if warn:
+        st.warning(warn)
+    if not data:
+        st.info("No seeds from this source.")
+        return
+
+    st.subheader("Scoring metric")
+    values, limits, mins, display = value_table_editor()
+    if not values:
+        st.info("The value table is empty — add at least one item.")
+        return
+
+    radius = st.number_input("Window radius (chunks from the spawn chunk, chebyshev)",
+                             min_value=1, max_value=200, value=default_r, step=1)
+    rows, qty_by_seed, marg, rejected = score_all(data, radius, values, limits, mins, display)
+    if rejected:
+        st.warning("Held back by Min requirements: "
+                   + ", ".join(f"{k} — {v} seed{'s' if v != 1 else ''}"
+                               for k, v in rejected.most_common())
+                   + f". {len(rows)} of {len(data)} seeds qualify.")
+    if not rows:
+        st.info("No seed meets every Min requirement." if rejected else "Nothing scored.")
+        return
+
+    st.subheader(f"Seeds ({len(rows)} scored)")
+    scores = [r["score"] for r in rows]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("best", f"{scores[0]:,.0f}")
+    c2.metric("median", f"{scores[len(scores) // 2]:,.0f}")
+    c3.metric("worst", f"{scores[-1]:,.0f}")
+    c4.metric("best / median",
+              f"{scores[0] / scores[len(scores) // 2]:.2f}" if scores[len(scores) // 2] else "—")
+    tall_table(pd.DataFrame(rows), 340)
+
+    st.subheader("Top scoring chests")
+    st.caption("Ranked by marginal contribution — what the chest earns once every richer chest has "
+               "already spent the per-item caps. A chest whose items were all capped away scores 0 "
+               "and is not listed.")
+    n_chests = st.number_input("How many", min_value=5, max_value=500, value=25, step=5)
+    tall_table(pd.DataFrame([{
+        "earns": round(earned, 2), "seed": seed,
+        "source": chest.source + (f" {chest.category}" if chest.category else ""),
+        "x": chest.pos[0], "y": chest.pos[1], "z": chest.pos[2],
+        "y nominal": chest.y_nominal,
+        "tp": tp(chest.pos[0], chest.pos[1] + 1, chest.pos[2]),
+        "contents": lootscore.chest_contents(chest, values, display),
+    } for earned, seed, chest in marg[:int(n_chests)]]), 420)
+
+    st.subheader("Everything that fed the score")
+    # "(top scorer)" is a sentinel rather than a seed id, so it re-resolves every run and follows the
+    # ranking as the metric is edited — which is what you want while tinkering. Picking an explicit
+    # seed pins it, because the selectbox is keyed and Streamlit keeps a keyed widget's value across
+    # reruns. Two behaviours, one widget, no extra checkbox to get out of sync.
+    seed_opts = [TOP_SCORER, "(all seeds combined)"] + [r["seed"] for r in rows]
+    if st.session_state.get("loot_breakdown") not in seed_opts:
+        st.session_state["loot_breakdown"] = TOP_SCORER  # source or limit changed; the pin is stale
+    which = st.selectbox(
+        "Breakdown for", seed_opts, key="loot_breakdown",
+        help="Defaults to whichever seed currently ranks first and follows it as you edit the "
+             "metric. Select a specific seed to pin it across reruns.")
+    if which == "(all seeds combined)":
+        qty = Counter()
+        for q in qty_by_seed.values():
+            qty.update(q)
+        denom = len(rows)
+    else:
+        seed = rows[0]["seed"] if which == TOP_SCORER else which
+        qty, denom = qty_by_seed[seed], 1
+        if which == TOP_SCORER:
+            st.caption(f"top scorer: seed {seed}")
+    breakdown = []
+    for k, n in qty.items():
+        c = lootscore.counted(k, n, limits) if denom == 1 else n
+        breakdown.append({"item": display.get(k, k), "found": n,
+                          "counted": c, "value": values[k],
+                          "contribution": round(values[k] * c, 2),
+                          "per seed": round(n / denom, 4),
+                          "capped": bool(denom == 1 and c != n)})
+    breakdown.sort(key=lambda r: -r["contribution"])
+    tot = sum(r["contribution"] for r in breakdown) or 1
+    for r in breakdown:
+        r["% of score"] = round(100 * r["contribution"] / tot, 2)
+    tall_table(pd.DataFrame(breakdown), 420)
+    unvalued = Counter()
+    for seed, spawn, chests in data:
+        for chest in lootscore.in_scope(chests, spawn, radius):
+            for name, q in chest.items:
+                if lootscore.norm(name) not in values:
+                    unvalued[lootscore.clean(name)] += q
+    with st.expander(f"Items carrying no value ({len(unvalued)} distinct) — candidates to add"):
+        tall_table(pd.DataFrame(
+            [{"item": n, "total": q, "per seed": round(q / len(rows), 3)}
+             for n, q in unvalued.most_common(200)]), 300)
+
+
+def render_baseline(seeds, seed_limit):
+    st.caption("How often each item actually turns up, measured on the seeds currently loaded. "
+               "This is the input to rarity normalisation: dividing an item's value by its mean "
+               "appearances per seed makes every item's *expected* contribution equal its stated "
+               "value, which stops bulk items like Redstone dominating.")
+    label, data, default_r, warn = loot_source_picker(seeds, seed_limit, "base")
+    if warn:
+        st.warning(warn)
+    if not data:
+        st.info("No seeds from this source.")
+        return
+    # No explicit key on purpose. A keyed widget's stored value outranks a changed `value=`
+    # argument, so switching source from corpus (default 15) to a sweep (default 60) would silently
+    # keep 15 and every rate below would be measured over the wrong window.
+    radius = st.number_input("Window radius (chunks)", min_value=1, max_value=200,
+                             value=default_r, step=1)
+
+    counts, present = Counter(), Counter()
+    for seed, spawn, chests in data:
+        seen_here = set()
+        for chest in lootscore.in_scope(chests, spawn, radius):
+            for name, q in chest.items:
+                k = lootscore.norm(name)
+                counts[k] += q
+                seen_here.add(k)
+        for k in seen_here:
+            present[k] += 1
+    n = len(data)
+    if not counts:
+        st.info("No chest items in this window.")
+        return
+
+    # vt_current is this pass's edited view, published by the Loot score tab, which renders earlier
+    # in the same script run — so this tab reflects the edit just made, not the previous one. It
+    # falls back to the base if that tab returned early (no source, empty table).
+    values, limits, display = ({}, {}, {})
+    table = st.session_state.get("vt_current")
+    if table is None:
+        table = st.session_state.get("vt_base")
+    if table is not None:
+        values, limits, _mins, display, _ = lootscore.parse_value_rows(
+            table.to_dict("records"))
+    else:
+        st.info("Open the Loot score tab first to load a value table; without one this tab shows "
+                "rates only.")
+
+    # k is pseudo-sightings, so a fixed default is wrong at a different sample size: k=200 against
+    # 5000 seeds is a mild 4% prior, but against 100 seeds it is twice the data and the prior
+    # decides the answer. Scale it and say so.
+    k_default = max(1, round(0.04 * n))
+    k_smooth = st.slider(
+        "Smoothing k (pseudo-sightings)", 0, max(50, 4 * k_default), k_default,
+        max(1, k_default // 8),
+        help="Normalised value = value / ((total + k) / seeds). k bounds the largest multiplier an "
+             "item can earn at seeds/k, which is what stops an item seen twice from topping the "
+             "table. At k=0 the scale is a lottery on whichever rare item a seed happened to roll. "
+             "The default is 4% of the loaded seed count.")
+    if n < 500:
+        st.caption(f"⚠ {n} seeds is a small sample for rate estimation. "
+                   f"{sum(1 for c in counts.values() if c < 100)} of {len(counts)} items have "
+                   "under 100 sightings, and their rates — hence their normalised values — are "
+                   "wide guesses. Raise the sidebar seed limit before exporting a table.")
+
+    rows = []
+    for key, total in counts.items():
+        name = display.get(key) or key
+        v = values.get(key)
+        rows.append({
+            "item": name,
+            "total": total,
+            "per seed": round(total / n, 4),
+            "seeds containing": present[key],
+            "% of seeds": round(100 * present[key] / n, 1),
+            "value": v,
+            "normalised": (round(lootscore.normalised_value(v, total, n, k_smooth), 4)
+                           if v is not None else None),
+            "low sample": total < 100,
+        })
+    rows.sort(key=lambda r: -r["total"])
+    st.caption(f"{n} seeds, radius {radius} chunks · {len(rows)} distinct items · "
+               f"{sum(1 for r in rows if r['value'] is not None)} of them carry a value")
+    tall_table(pd.DataFrame(rows), 460)
+
+    valued = [r for r in rows if r["normalised"] is not None]
+    if valued:
+        never = [display.get(k, k) for k in values if k not in counts]
+        if never:
+            with st.expander(f"In the value table but never seen here ({len(never)})"):
+                st.write(", ".join(sorted(never)))
+        st.caption("A rate measured on a small sample is a wide estimate — that is what k is "
+                   "compensating for, not fixing. `low sample` marks items under 100 sightings.")
+        out = pd.DataFrame([{"Item": r["item"], "Value": r["normalised"],
+                             "Limit": limits.get(lootscore.norm(r["item"])),
+                             "Min": _mins.get(lootscore.norm(r["item"])),
+                             "Notes": f"was {r['value']:g}; {r['total']} seen in {n} seeds; k={k_smooth}"}
+                            for r in valued])
+        st.download_button("Download normalised value table", out.to_csv(index=False),
+                           f"value-table-normalised-k{k_smooth}.csv", "text/csv")
+        if st.button("Use this normalised table as the scoring metric"):
+            set_value_base(out[["Item", "Value", "Limit", "Min"]],
+                           f"normalised from {n} seeds, k={k_smooth}")
+            st.session_state.pop("_vt_preset", None)
+            st.success("Loaded into the Loot score tab's editor.")
+
+
+# ------------------------------------------------------------- loot reference (static tables)
+
+REFERENCE = REPO / "reference"
+# Sections the reference tab shows. Forestry genomes, knowledge notes, vis amulets and the
+# odds-and-ends bucket are dropped: they are noise for routing, not gear.
+REF_KINDS = ["enchanted", "enchanted book", "Tinkers' tool", "GT tool", "charged"]
+
+
+@st.cache_data
+def load_reference(path, mtime):
+    return pd.read_csv(path, keep_default_na=False)
+
+
+def render_reference():
+    st.caption("What the pack's loot tables actually contain, resolved from each entry's NBT — "
+               "enchantments by name, tool materials and stats, weapon damage in hearts. This is a "
+               "static reference for the **tables**, not the chests of any seed: an entry says what "
+               "the item looks like whenever that table rolls it.")
+    packs = sorted(p.name for p in REFERENCE.glob("*") if (p / "nbt-items.csv").is_file()) \
+        if REFERENCE.is_dir() else []
+    if not packs:
+        st.info(f"No reference data — expected {REFERENCE}/<pack>/nbt-items.csv. "
+                "Generate it with gtnh-determinism/seedsearch/loot-nbt-report.py.")
+        return
+    pack = st.selectbox("Pack", packs, index=len(packs) - 1)
+    base = REFERENCE / pack
+    df = load_reference(str(base / "nbt-items.csv"), (base / "nbt-items.csv").stat().st_mtime)
+
+    search = st.text_input("Filter", placeholder="item name, enchantment, material…",
+                           help="Matches the item name and the resolved description.")
+    if search:
+        s = search.casefold()
+        df = df[df.apply(lambda r: s in str(r["item"]).casefold()
+                         or s in str(r["description"]).casefold(), axis=1)]
+
+    weapons = df[df["hearts"] != ""].copy()
+    if not weapons.empty:
+        st.subheader(f"Weapons ({len(weapons)})")
+        st.caption("Hearts are health points halved, matching the tooltip. Base damage is the item's "
+                   "`attackDamage` attribute, or `InfiTool.Attack` for Tinkers' tools. Sharpness adds "
+                   "1.25 HP per level against everything; Smite and Bane of Arthropods add 2.5 per "
+                   "level but only against undead and arthropods, so those are separate columns "
+                   "rather than folded into the headline number.")
+        for c in ("hearts", "hearts_vs_undead", "hearts_vs_arthropod", "attack_hp", "base_attack_hp"):
+            weapons[c] = pd.to_numeric(weapons[c], errors="coerce")
+        # The report leads the description with the damage; here it has its own columns, so drop the
+        # duplicate rather than printing the same number twice on one row.
+        weapons["description"] = weapons["description"].str.replace(
+            r"^[^·]*hearts[^·]*(· )?", "", regex=True)
+        weapons = weapons.sort_values("hearts", ascending=False)
+        tall_table(weapons[["item", "hearts", "hearts_vs_undead", "hearts_vs_arthropod",
+                            "attack_hp", "base_attack_hp", "description", "found in"]], 420)
+
+    armour = df[df["armor_points"] != ""].copy()
+    if not armour.empty:
+        st.subheader(f"Armour ({len(armour)})")
+        st.caption("Ranked by **damage reduction**, not by armour points — the two mitigations "
+                   "multiply, so points alone gets the order wrong. 1.7.10 applies "
+                   "`damage × (25 − armour)/25` and then `damage × (25 − i)/25`, where `i` is not "
+                   "the raw EPF: it is `ceil(EPF/2) + rand(0 … floor(EPF/2))`, clamped to 20, so the "
+                   "enchantment half is random per hit and the column is its exact expectation. "
+                   "Armour points come from `ItemArmor.damageReduceAmount` (2 points = 1 icon; a "
+                   "full vanilla diamond set is 20, worth 80%). `EPF all` is Protection, the only "
+                   "one that applies to every damage source; Fire, Fall, Blast and Projectile are "
+                   "conditional and stay in their own column rather than being summed in.")
+        st.caption("Both inputs are SET totals in game. Scoring one piece as if it were the whole "
+                   "set is a convention — monotonic in both inputs, so the ranking holds, but the "
+                   "absolute percentage is only reached when nothing else is worn. Forge "
+                   "`ISpecialArmor` items compute protection at damage time and would be "
+                   "understated; none of this pack's loot armour is one.")
+        for c in ("damage_reduction_pct", "armor_points", "armor_icons", "epf_all", "durability"):
+            armour[c] = pd.to_numeric(armour[c], errors="coerce")
+        # Strip the leading stat clauses the report puts in the description — they have their own
+        # columns here. Repeating group because a piece can carry several EPF clauses in a row.
+        armour["description"] = armour["description"].str.replace(
+            r"^[^·]*reduction[^·]*(· )?[^·]*armour[^·]*(· )?(\+[^·]*EPF[^·]*(· )?)*", "",
+            regex=True)
+        armour = armour.sort_values(["damage_reduction_pct", "armor_points"], ascending=False)
+        tall_table(armour[["item", "damage_reduction_pct", "armor_points", "armor_icons", "slot",
+                           "epf_all", "epf_conditional", "durability", "description",
+                           "found in"]], 420)
+
+    for kind in REF_KINDS:
+        sub = df[df["kind"] == kind]
+        if sub.empty:
+            continue
+        st.subheader(f"{kind} ({len(sub)})")
+        cols = ["item", "description", "found in"]
+        if (sub["hearts"] != "").any():
+            cols.insert(2, "hearts")
+        tall_table(sub[cols], 380)
+
+    hidden = sorted(set(df["kind"]) - set(REF_KINDS))
+    if hidden:
+        st.caption("Not shown, as gear-irrelevant: " + ", ".join(
+            f"{k} ({int((df['kind'] == k).sum())})" for k in hidden)
+            + ". They are in the CSV.")
+    ench_path = base / "enchantments.csv"
+    if ench_path.is_file():
+        with st.expander("Enchantment id → name (this pack)"):
+            st.caption("Ids are assigned at registration and are pack-specific, so this map is "
+                       "dumped from a running server rather than assumed. About half of the ids the "
+                       "tables use are not vanilla.")
+            tall_table(load_reference(str(ench_path), ench_path.stat().st_mtime), 320)
+
+
 def main():
     st.set_page_config(page_title="gtnh-seedlib browser", layout="wide",
                        initial_sidebar_state="expanded")
@@ -1078,17 +1729,25 @@ def main():
         st.error("No corpora found — expected gtnh-*/**.tar.gz next to browser/. "
                  "If tarballs are 3-line pointer files, run `git lfs pull`.")
         st.stop()
-    tar_key, mats, seeds = render_sidebar(versions)
+    tar_key, mats, seeds, seed_limit = render_sidebar(versions)
     things = all_things(tar_key)
 
-    tab_overview, tab_query, tab_coke, tab_prefilter, tab_detail = st.tabs(
-        ["Seed overview", "Cluster query", "coke%", "Prefilter", "Seed detail"])
+    (tab_overview, tab_query, tab_coke, tab_loot, tab_baseline, tab_reference, tab_prefilter,
+     tab_detail) = st.tabs(
+        ["Seed overview", "Cluster query", "coke%", "Loot score", "Baseline rates",
+         "Loot reference", "Prefilter", "Seed detail"])
     with tab_overview:
         render_overview(seeds, mats, things)
     with tab_query:
         render_query(seeds, mats, things)
     with tab_coke:
         render_coke(seeds)
+    with tab_loot:
+        render_loot(seeds, seed_limit)
+    with tab_baseline:
+        render_baseline(seeds, seed_limit)
+    with tab_reference:
+        render_reference()
     with tab_prefilter:
         render_prefilter()
     with tab_detail:

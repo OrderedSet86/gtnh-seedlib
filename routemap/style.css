@@ -1,0 +1,268 @@
+:root {
+  --bg: #14171c;
+  --panel: #1c2027;
+  --panel2: #232830;
+  --line: #333a45;
+  --fg: #dfe4ec;
+  --dim: #8b94a3;
+  --accent: #7fb2ff;
+  --warn: #e0a33c;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow: hidden;
+}
+
+#map {
+  position: absolute;
+  inset: 0;
+  background: #0d0f13;
+}
+
+/* Base map images are 1 px per block. Let them stay blocky when zoomed in rather than
+   dissolving into a bilinear smear. */
+.pixelated {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* ---------------------------------------------------------------- panel */
+
+#panel {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: 310px;
+  z-index: 1000;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 40px;
+}
+
+#panel.hidden { transform: translateX(-100%); }
+#panel { transition: transform .15s ease; }
+
+#panel header {
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+#panel h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .01em; }
+#panel .sub { color: var(--dim); font-size: 11px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+#panel section {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+#panel h2 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--dim);
+}
+
+.count { color: var(--dim); font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+/* segmented control */
+.seg { display: flex; gap: 0; margin-bottom: 8px; flex-wrap: wrap; }
+.seg button {
+  flex: 1 1 auto;
+  padding: 5px 8px;
+  background: var(--panel2);
+  color: var(--dim);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.seg button + button { border-left: none; }
+.seg button:first-child { border-radius: 4px 0 0 4px; }
+.seg button:last-child { border-radius: 0 4px 4px 0; }
+.seg button.on { background: var(--accent); color: #10141a; border-color: var(--accent); font-weight: 600; }
+.seg button:disabled { opacity: .35; cursor: default; }
+
+.btnrow { display: flex; gap: 6px; margin: 6px 0; }
+.btnrow button {
+  padding: 3px 9px;
+  background: var(--panel2);
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.btnrow button:hover { color: var(--fg); }
+
+label.chk {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 0;
+  cursor: pointer;
+}
+label.chk input { margin: 0; accent-color: var(--accent); }
+
+label.slider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--dim);
+  font-size: 11px;
+  margin: 6px 0;
+}
+label.slider input { flex: 1; accent-color: var(--accent); }
+label.slider span { font-variant-numeric: tabular-nums; min-width: 3.2em; text-align: right; color: var(--fg); }
+
+input[type=search] {
+  width: 100%;
+  padding: 5px 8px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--fg);
+  font: inherit;
+  margin-bottom: 6px;
+}
+
+.list { max-height: 230px; overflow-y: auto; margin-top: 4px; }
+.list::-webkit-scrollbar { width: 8px; }
+.list::-webkit-scrollbar-thumb { background: #39414d; border-radius: 4px; }
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.row input { margin: 0; accent-color: var(--accent); }
+.row .sw { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.row .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .n { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 11px; }
+.row.off .nm { color: var(--dim); }
+
+.note { color: var(--dim); font-size: 11px; margin-top: 6px; }
+.note.warn { color: var(--warn); }
+
+.legend { display: flex; gap: 12px; margin: 4px 0 2px 22px; font-size: 11px; color: var(--dim); }
+.legend span { display: flex; align-items: center; gap: 5px; font-variant-numeric: tabular-nums; }
+.legend i { width: 12px; height: 2px; border-radius: 1px; }
+
+select {
+  flex: 1;
+  padding: 3px 6px;
+  background: var(--panel2);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 11px;
+}
+
+/* Ring labels sit on the map itself, so they need their own contrast against terrain. */
+.ringlbl {
+  font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-shadow: 0 0 3px #0d0f13, 0 0 3px #0d0f13, 0 0 5px #0d0f13;
+  white-space: nowrap;
+}
+
+#caveats { color: var(--warn); font-size: 11px; }
+#caveats p { margin: 0 0 7px; }
+#caveats p:last-child { margin-bottom: 0; }
+
+/* ---------------------------------------------------------------- chrome */
+
+#toggle {
+  position: absolute;
+  top: 10px; left: 320px;
+  z-index: 1001;
+  width: 30px; height: 30px;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  transition: left .15s ease;
+}
+#panel.hidden ~ #toggle { left: 10px; }
+
+#zoomreadout { color: var(--accent); }
+
+#readout {
+  position: absolute;
+  bottom: 0; right: 0;
+  z-index: 1001;
+  padding: 3px 9px;
+  background: rgba(20, 23, 28, .88);
+  border: 1px solid var(--line);
+  border-right: none;
+  border-bottom: none;
+  border-radius: 4px 0 0 0;
+  color: var(--dim);
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------- popups */
+
+.leaflet-popup-content-wrapper, .leaflet-popup-tip {
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  box-shadow: 0 4px 18px rgba(0,0,0,.5);
+}
+.leaflet-popup-content-wrapper { border-radius: 5px; }
+.leaflet-popup-content { margin: 9px 11px; font-size: 12px; max-height: 340px; overflow-y: auto; }
+.leaflet-popup-close-button { color: var(--dim) !important; }
+.leaflet-container a.leaflet-popup-close-button:hover { color: var(--fg) !important; }
+.leaflet-container { background: #0d0f13; font-family: inherit; }
+
+.pop h3 { margin: 0 0 5px; font-size: 13px; }
+.pop .kv { color: var(--dim); font-size: 11px; margin-bottom: 5px; }
+.pop .tp {
+  display: block;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 3px 6px;
+  margin: 4px 0;
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  cursor: pointer;
+  user-select: all;
+}
+.pop .tp:hover { border-color: var(--accent); }
+.pop .tp b { color: var(--accent); font-weight: 600; }
+.pop .warn { color: var(--warn); font-size: 11px; margin: 4px 0; }
+.pop ul { margin: 4px 0 0; padding-left: 16px; }
+.pop li { margin: 1px 0; }
+.pop li .q { color: var(--dim); }
+
+.leaflet-tooltip {
+  background: rgba(20,23,28,.94);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  font-size: 11px;
+  box-shadow: none;
+}
+.leaflet-tooltip::before { display: none; }
+
+@media (max-width: 640px) {
+  #panel { width: 100%; }
+  #toggle { left: auto; right: 10px; }
+  #panel.hidden ~ #toggle { left: auto; }
+}

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GTNH route map</title>
+<link rel="stylesheet" href="vendor/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="panel">
+  <header>
+    <h1>Route map</h1>
+    <div class="sub" id="worldline">loading&hellip;</div>
+  </header>
+
+  <section>
+    <h2>Dimension</h2>
+    <div class="seg" id="dims"></div>
+  </section>
+
+  <section>
+    <h2>Base</h2>
+    <div class="seg" id="bases"></div>
+    <label class="slider">Opacity <input type="range" id="baseopacity" min="0" max="100" value="100"></label>
+    <div class="note" id="basenote"></div>
+  </section>
+
+  <section>
+    <h2>Ore veins <span class="count" id="veincount"></span></h2>
+    <label class="chk"><input type="checkbox" id="veinson" checked> Show veins</label>
+    <label class="chk" title="These veins differed between a rows walk and a spiral walk of the same seed. GT vein placement is not a pure function of the seed on this pack, so they may not be there."><input type="checkbox" id="veinunstable"> Include route-unstable</label>
+    <label class="slider">Max distance <input type="range" id="veindist" min="0" max="1600" value="1600"><span id="veindistv">1600</span></label>
+    <div class="btnrow"><button data-ores="all">All</button><button data-ores="none">None</button></div>
+    <div class="list" id="oreList"></div>
+  </section>
+
+  <section>
+    <h2>Loot <span class="count" id="lootcount"></span></h2>
+    <div class="seg" id="lootmode"></div>
+    <div id="lootChestOpts">
+      <label class="slider">Min chest value <input type="range" id="lootmin" min="0" max="100" value="0"><span id="lootminv">0</span></label>
+      <div class="list" id="srcList"></div>
+    </div>
+    <div id="lootItemOpts" hidden>
+      <input type="search" id="itemsearch" placeholder="Search item, e.g. Bronze Ingot">
+      <div class="list" id="itemList"></div>
+      <div class="btnrow"><button id="itemclear">Clear selection</button></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>POIs</h2>
+    <div class="list" id="poiList"></div>
+  </section>
+
+  <section id="climatesec" hidden>
+    <h2>Climate</h2>
+    <label class="chk"><input type="checkbox" id="climate"> Show no-rain / humid regions</label>
+    <div class="legend" id="climatelegend" hidden>
+      <span><i style="background:#ffc452"></i>no rain</span>
+      <span><i style="background:#60f0be"></i>humid</span>
+    </div>
+    <div class="note" id="climatenote"></div>
+  </section>
+
+  <section>
+    <h2>Reference</h2>
+    <label class="chk"><input type="checkbox" id="rings"> Distance rings from spawn</label>
+    <div class="legend" id="ringlegend" hidden></div>
+    <label class="slider">Grid
+      <select id="grid">
+        <option value="off" selected>off</option>
+        <option value="16">chunk &mdash; 16</option>
+        <option value="256">TF feature grid &mdash; 256</option>
+        <option value="512">region / JM tile &mdash; 512</option>
+      </select>
+    </label>
+    <div class="note" id="gridnote"></div>
+  </section>
+
+  <section id="caveats"></section>
+</div>
+
+<button id="toggle" title="Show/hide panel">&#9776;</button>
+<div id="readout"><span id="zoomreadout"></span><span id="posreadout"></span></div>
+
+<script src="vendor/leaflet.js"></script>
+<script src="layers.js"></script>
+<script src="map.js"></script>
+</body>
+</html>
