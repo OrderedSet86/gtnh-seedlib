@@ -282,9 +282,17 @@ bundle from `/worlds/<seed>/`. `$PORT` overrides 8502. Any static server will do
 If you cloned before running `git lfs install`, the rasters arrive as pointer
 stubs and the map is blank — `git lfs pull` fixes it without re-cloning.
 
-Nothing needs installing to *view* a bundle: no Python packages, no network, and
-Leaflet is vendored in `routemap/vendor/`. Rebuilding a bundle with
-`tools/build_world_bundle.py` needs `numpy` and `Pillow`.
+**No uv, no pip, no npm, no packages of any kind.** Unlike the Streamlit browser
+above, viewing a bundle installs nothing: `run.sh` is `python3 -m http.server`
+from the standard library, Leaflet is vendored in `routemap/vendor/`, and the
+page makes no external requests. Verified by serving it from a venv created with
+`--without-pip` and no site-packages — it renders identically. Any Python 3 will
+do, and any other static file server works just as well (`npx serve`, `caddy
+file-server`, nginx) as long as it is rooted at the repo.
+
+The only build-time dependencies are for *rebuilding* a bundle with
+`tools/build_world_bundle.py`, which needs `numpy` and `Pillow`. A fresh user who
+just wants the map never runs it.
 
 Seed `-1636594104014467454` (daily-707) is bundled and opens by default. Other
 worlds go in `worlds/<seed>/` and are selected with `?world=<seed>` — worldgen
