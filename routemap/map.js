@@ -182,9 +182,14 @@ async function setDim(dim) {
   buildLootControls();
   buildPoiList();
   buildClimate();
-  drawAll();
+  // Set the view BEFORE adding any layer. Until the map has a view it is not "ready", and
+  // L.Map.addLayer defers the real work through whenReady() -- so adds and removes queue up
+  // and replay in call order, which makes restack() silently do nothing and leaves the POI
+  // area boxes on top of the loot markers they cover.
   fitDim();
+  drawAll();
   applyQuery();
+  restack();
 }
 
 /** Width of map the panel is sitting on top of, in px. */
@@ -233,9 +238,20 @@ function fitDimInner() {
   if (panel) map.panBy([-panel / 2, 0], { animate: false });
 }
 
+// Ores selected on load. All 1256 vein boxes at once is a mesh you cannot read anything out
+// of, so the map opens on the few worth routing to and the rest are one click away. Any of
+// these the dimension does not have is skipped (the Twilight Forest has lapis but no mica);
+// if it has none of them, fall back to showing everything rather than an empty map.
+const DEFAULT_ORES = {
+  0: ['lapis', 'mica'],
+  7: ['terraaer', 'perditioordo', 'aquaignis'], // the Twilight Forest shard mixes
+};
+
 function resetFilters() {
   const d = state.data[state.dim];
-  state.veins.ores = new Set(d.veins ? Object.keys(d.veins.ores) : []);
+  const all = d.veins ? Object.keys(d.veins.ores) : [];
+  const wanted = (DEFAULT_ORES[state.dim] || []).filter((o) => d.veins && d.veins.ores[o]);
+  state.veins.ores = new Set(wanted.length ? wanted : all);
   state.loot.sources = new Set(d.loot ? Object.keys(d.loot.sources) : []);
   state.loot.items = new Set();
   state.loot.mode = 'chest';
@@ -270,10 +286,6 @@ function buildBaseButtons() {
   }
   if (!opts.some((o) => o.key === state.base)) state.base = opts[0].key;
   for (const b of el.children) b.classList.toggle('on', b.dataset.base === state.base);
-
-  const cur = opts.find((o) => o.key === state.base);
-  $('basenote').className = 'note' + (cur?.warn ? ' warn' : '');
-  $('basenote').textContent = cur?.note || '';
 }
 
 function drawBase() {
@@ -453,6 +465,30 @@ function buildPoiList() {
 
 /* ------------------------------------------------------------------ draw */
 
+/**
+ * Bottom-to-top order for every vector group.
+ *
+ * A canvas renderer resolves clicks to the LAST layer drawn, and that is decided by the order
+ * layers were added to the map -- so rebuilding any one group (a filter change) would otherwise
+ * float it to the top and let it swallow clicks meant for whatever it overlaps. Re-adding all
+ * of them in this fixed order after any change keeps the priority stable. Re-adding is cheap:
+ * the shapes already exist, only their registration with the renderer moves.
+ *
+ * Areas (biome squares, structure piece boxes) sit at the bottom because they are large and
+ * mostly context; the point markers you actually click sit at the top.
+ */
+const VECTOR_STACK = ['poiAreas', 'grid', 'veins', 'loot', 'rings', 'poiMarkers'];
+
+function restack() {
+  for (const role of VECTOR_STACK) {
+    const l = layers[role];
+    if (l && map.hasLayer(l)) {
+      map.removeLayer(l);
+      l.addTo(map);
+    }
+  }
+}
+
 function swap(role, layer) {
   if (layers[role]) map.removeLayer(layers[role]);
   layers[role] = layer;
@@ -462,6 +498,7 @@ function swap(role, layer) {
     restyleForZoom([layer], zoomScale(map.getZoom()));
     layer.addTo(map);
   }
+  restack();
 }
 
 function drawVeins() {
@@ -475,21 +512,19 @@ function drawLoot() {
 }
 
 function drawPois() {
-  swap('pois', poiLayer(state.data[state.dim].features, state.spawn, state.pois));
+  const { areas, markers } = poiLayers(
+    state.data[state.dim].features,
+    state.spawn,
+    state.pois
+  );
+  swap('poiAreas', areas);
+  swap('poiMarkers', markers);
 }
 
 function buildClimate() {
   const c = (state.meta.dims[String(state.dim)] || {}).climate;
   $('climatesec').hidden = !c;
   if (!c) return;
-  const pct = (n) => `${((100 * n) / Math.max(1, c.total_columns)).toFixed(1)}%`;
-  // Spell out the gap between the prefilter's inscribed square and the real region, because
-  // "10x10" invites the reading that the desert is 10 chunks across.
-  $('climatenote').textContent =
-    `${c.norain_chunks_full.toLocaleString()} fully no-rain chunks (${pct(c.norain_columns)} ` +
-    `of surveyed columns) and ${c.humid_chunks_full.toLocaleString()} fully humid. The dashed ` +
-    `POI squares are the largest axis-aligned squares the prefilter could inscribe in these ` +
-    `regions, not the regions themselves.`;
 }
 
 function drawClimate() {
@@ -609,7 +644,10 @@ function bindChrome() {
   // 1 px = 1 block at zoom 0, "px/block" is the only scale figure that means anything here.
   const onZoom = () => {
     const z = map.getZoom();
-    restyleForZoom([layers.veins, layers.loot, layers.pois, layers.grid], zoomScale(z));
+    restyleForZoom(
+      [layers.poiAreas, layers.veins, layers.loot, layers.poiMarkers, layers.grid],
+      zoomScale(z)
+    );
     const s = Math.pow(2, z);
     $('zoomreadout').textContent =
       s >= 1 ? `${+s.toFixed(2)} px/block` : `${+(1 / s).toFixed(2)} blocks/px`;
@@ -625,7 +663,9 @@ function bindChrome() {
   });
   map.on('mouseout', () => ($('posreadout').textContent = ''));
 
-  // Click a /tp line to select it for copying.
+  // Click a /tp line to select and copy it. The element holds the bare command -- the label is
+  // a sibling -- so there is nothing to strip off, and what gets selected on screen is exactly
+  // what lands on the clipboard.
   document.addEventListener('click', (e) => {
     const el = e.target.closest('code.tp');
     if (!el) return;
@@ -634,7 +674,7 @@ function bindChrome() {
     const s = getSelection();
     s.removeAllRanges();
     s.addRange(r);
-    navigator.clipboard?.writeText(el.textContent.replace(/^\S+\s+(?=\/tp)/, '')).catch(() => {});
+    navigator.clipboard?.writeText(el.textContent).catch(() => {});
   });
 }
 

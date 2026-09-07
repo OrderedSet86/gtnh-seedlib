@@ -239,19 +239,32 @@ select {
 
 .pop h3 { margin: 0 0 5px; font-size: 13px; }
 .pop .kv { color: var(--dim); font-size: 11px; margin-bottom: 5px; }
+.pop .tprow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 4px 0;
+}
+/* Not selectable: dragging across the row must not pick the label up with the command. */
+.pop .tplbl {
+  flex: none;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  user-select: none;
+}
 .pop .tp {
-  display: block;
+  flex: 1;
   background: var(--panel2);
   border: 1px solid var(--line);
   border-radius: 3px;
   padding: 3px 6px;
-  margin: 4px 0;
   font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
   cursor: pointer;
+  /* One click selects the whole command and nothing but the command. */
   user-select: all;
 }
 .pop .tp:hover { border-color: var(--accent); }
-.pop .tp b { color: var(--accent); font-weight: 600; }
 .pop .warn { color: var(--warn); font-size: 11px; margin: 4px 0; }
 .pop ul { margin: 4px 0 0; padding-left: 16px; }
 .pop li { margin: 1px 0; }

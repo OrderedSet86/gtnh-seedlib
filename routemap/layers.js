@@ -50,9 +50,18 @@ function tpLine(x, y, z, label) {
   return tpRaw(tpCmd(x, y, z), label);
 }
 
-/** Same, for a /tp string the exporter already computed -- do not recompute those. */
+/** Same, for a /tp string the exporter already computed -- do not recompute those.
+ *
+ * The label sits OUTSIDE the <code>, which is the whole point: `user-select: all` on the code
+ * element means one click selects exactly the command and nothing else. Putting the label
+ * inside and stripping it back off at copy time is what the previous version did, and it
+ * quietly failed for every multi-word label -- "1. trigger /tp ..." pasted into chat verbatim.
+ */
 function tpRaw(cmd, label) {
-  return `<code class="tp">${label ? `<b>${esc(label)}</b> ` : ''}${esc(cmd)}</code>`;
+  return (
+    `<div class="tprow">${label ? `<span class="tplbl">${esc(label)}</span>` : ''}` +
+    `<code class="tp">${esc(cmd)}</code></div>`
+  );
 }
 
 const dist = (x, z, spawn) => Math.round(Math.hypot(x - spawn.x, z - spawn.z));
@@ -185,6 +194,9 @@ const YCONF_STYLE = {
   sky: { color: '#e05c5c', weight: 1.4, dash: '2,3' },
 };
 
+// contents_confidence values that mean "nothing is wrong" and so are not worth a line.
+const QUIET_CONFIDENCE = new Set(['cross-env verified', 'predicted', 'exact', '']);
+
 const YCONF_TEXT = {
   exact: 'Y is exact.',
   approx: 'Y is approximate and may be one block low (mod runs after decoration).',
@@ -271,8 +283,12 @@ function lootPopup(c, matched, spawn) {
   if (c.yconf !== 'exact') {
     h += `<div class="warn">${esc(YCONF_TEXT[c.yconf] || c.ynote)}</div>`;
   }
-  if (c.conf && c.conf !== 'exact') {
-    h += `<div class="warn">Contents confidence: ${esc(c.conf)}</div>`;
+  // Only surface contents_confidence when it is actually a caveat. "cross-env verified" and
+  // "predicted" are the normal, healthy states and cover 997 of 1044 chests here -- printing
+  // them as a warning on almost every chest trains you to ignore the line, which is exactly
+  // when the 47 that do mean something get missed.
+  if (c.conf && !QUIET_CONFIDENCE.has(c.conf)) {
+    h += `<div class="warn">${esc(c.conf)}${c.note ? ` &mdash; ${esc(c.note)}` : ''}</div>`;
   }
 
   const show = matched && matched.length ? matched : c.items;
@@ -342,10 +358,33 @@ const POI_KINDS = [
       'without generating it, and for this cell it could not tell which handler wins — ' +
       'so something is likely here, but not what. Not "empty", just unknown.',
   },
-  { key: 'no-rain', label: 'No-rain square', colour: '#ffe08a' },
-  { key: 'humid', label: 'Humid square', colour: '#8affc8' },
+  // Off by default. These are the largest axis-aligned squares the prefilter could inscribe,
+  // not the regions themselves -- on this world the no-rain square is 100 chunks against 4408
+  // that actually qualify. Two big dashed boxes implying otherwise are not what the map should
+  // open on; the Climate overlay shows the real thing.
+  {
+    key: 'no-rain',
+    label: 'No-rain square',
+    colour: '#ffe08a',
+    off: true,
+    about:
+      'Largest all-no-rain square the stage-0 prefilter could inscribe. The real no-rain ' +
+      'region is much larger and ragged — see the Climate overlay.',
+  },
+  {
+    key: 'humid',
+    label: 'Humid square',
+    colour: '#8affc8',
+    off: true,
+    about:
+      'Largest all-humid square the stage-0 prefilter could inscribe. The real humid region ' +
+      'is much larger and ragged — see the Climate overlay.',
+  },
   { key: 'village-pieces', label: 'Village piece boxes', colour: '#c9b46a', off: true },
-  { key: 'stronghold-pieces', label: 'Stronghold piece boxes', colour: '#8fd4ff', off: true },
+  // On by default: a stronghold's marker is one dot for a structure that sprawls over
+  // hundreds of blocks underground, and the piece boxes are the only thing that shows its
+  // actual footprint and which way the corridors run.
+  { key: 'stronghold-pieces', label: 'Stronghold piece boxes', colour: '#8fd4ff' },
 ];
 
 const POI_KIND = Object.fromEntries(POI_KINDS.map((k) => [k.key, k]));
@@ -423,19 +462,26 @@ function poiFeatures(pois) {
   return out;
 }
 
-// Hit-testing on a canvas renderer resolves to the last thing drawn, so draw order is hover
-// priority. Big area shapes go down first: the humid square is 352 blocks across and would
-// otherwise swallow every tooltip inside it. Point markers go last and always win.
-const DRAW_ORDER = { square: 0, box: 1, marker: 2 };
-
-function poiLayer(features, spawn, enabled) {
-  const g = L.layerGroup();
+/**
+ * Build the POI features as TWO groups: area shapes and point markers.
+ *
+ * Hit-testing on a canvas renderer resolves to the last thing drawn, so draw order is click
+ * priority -- and that ordering is global, not per layer group. Areas and markers therefore
+ * cannot live in one group: the caller has to be able to put every area shape underneath the
+ * ore veins and loot markers, which are separate groups entirely. All 24 stronghold chests sit
+ * inside a stronghold piece box, so with the areas on top not one of them was clickable.
+ *
+ * See VECTOR_STACK in map.js for the order they are put back in.
+ */
+function poiLayers(features, spawn, enabled) {
+  const areas = L.layerGroup();
+  const markers = L.layerGroup();
   const shown = features.filter((f) => enabled.has(f.kind));
-  const rank = (f) => DRAW_ORDER[f.square ? 'square' : f.box ? 'box' : 'marker'];
-  // Stable sort, so within a tier the original ordering is preserved.
-  shown.sort((a, b) => rank(a) - rank(b));
+  // Squares below piece boxes: a biome square is far larger than any structure piece.
+  shown.sort((a, b) => (a.square ? 0 : 1) - (b.square ? 0 : 1));
 
   for (const f of shown) {
+    const g = f.square || f.box ? areas : markers;
     const colour = poiColour(f.kind);
 
     if (f.box) {
@@ -507,7 +553,7 @@ function poiLayer(features, spawn, enabled) {
     m.bindPopup(() => poiPopup(f, spawn), { maxWidth: 340 });
     g.addLayer(m);
   }
-  return g;
+  return { areas, markers };
 }
 
 function poiColour(kind) {
