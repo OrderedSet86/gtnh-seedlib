@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GTNH route map</title>
 <link rel="stylesheet" href="vendor/leaflet.css">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 
@@ -86,8 +86,14 @@
 <button id="toggle" title="Show/hide panel">&#9776;</button>
 <div id="readout"><span id="zoomreadout"></span><span id="posreadout"></span></div>
 
+<!-- ?v= is a cache buster, and it is not optional. A browser will reuse a cached layers.js
+     without revalidating even while it refetches map.js, which loads two mismatched halves of the
+     app. The symptom is a ReferenceError naming whichever function was just added
+     ("setOreDim is not defined") -- it looks like a code bug and is not one. GitHub Pages caches
+     at least as hard, so returning visitors hit it after every deploy.
+     BUMP THIS whenever layers.js, map.js or style.css changes. -->
 <script src="vendor/leaflet.js"></script>
-<script src="layers.js"></script>
-<script src="map.js"></script>
+<script src="layers.js?v=2"></script>
+<script src="map.js?v=2"></script>
 </body>
 </html>

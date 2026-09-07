@@ -110,11 +110,48 @@ const ORE_COLOURS = {
   coal: '#9095a0',
 };
 
+/**
+ * Per-dimension colour overrides.
+ *
+ * The base palette assumes the overworld's greens, greys and blues. The Nether is netherrack
+ * red and lava orange edge to edge, so every warm hue in that palette -- iron's tan, copper's
+ * orange, redstone's red -- lands on a background of its own colour and disappears, casing or
+ * no casing. These are the same ores drawn in the cool half of the wheel, avoiding hue 0-45
+ * entirely, and spread far enough apart to stay separable at 11 ways.
+ */
+const ORE_COLOURS_BY_DIM = {
+  '-1': {
+    netherquartz: '#ffffff', // white, as the block is
+    sulfur: '#f5e663', // yellow, as the block is; hue 55 clears lava's ~20
+    beryllium: '#86e05a', // green
+    copper: '#4fe0b0', // teal, NOT its usual orange
+    saltpeterelectrotine: '#58d8f0', // cyan
+    molybdenum: '#7fb8ff', // blue
+    tetrahedrite: '#9f9fff', // indigo
+    manganese: '#c07fe0', // purple
+    redstone: '#ff7fd8', // magenta, NOT red
+    quartz: '#ded0f0', // pale lilac, kept clear of netherquartz's white
+    // Near-grey, not a blue: at 240 boxes iron is the most common mix here and has to recede so
+    // the rare ones read. A saturated steel blue sat 3 degrees of hue from molybdenum and was
+    // almost indistinguishable from it, which is the worst pair to confuse -- molybdenum is the
+    // rarest (5) and the one worth routing to.
+    iron: '#b6bcc2',
+  },
+};
+
+// Which dimension's overrides to use. Set by the viewer when the tab changes.
+let ORE_DIM = '0';
+function setOreDim(dim) {
+  ORE_DIM = String(dim);
+}
+
 // Golden-angle hues for anything not named above, so newly-seen ores spread out instead of
 // clustering the way the old hash did.
 const ORE_FALLBACK = {};
 let oreFallbackN = 0;
 function oreColour(ore) {
+  const perDim = ORE_COLOURS_BY_DIM[ORE_DIM];
+  if (perDim && perDim[ore]) return perDim[ore];
   if (ORE_COLOURS[ore]) return ORE_COLOURS[ore];
   if (!ORE_FALLBACK[ore]) {
     ORE_FALLBACK[ore] = `hsl(${(oreFallbackN++ * 137.508) % 360}, 70%, 68%)`;
@@ -124,11 +161,13 @@ function oreColour(ore) {
 
 function veinLayer(data, spawn, filter) {
   const g = L.layerGroup();
-  // With all 28 ores on, 1254 overlapping boxes have to stay faint or they hide the terrain
-  // the veins are meant to be located against. Once you have filtered down to a handful there
-  // is no clutter budget to protect, so the survivors are drawn to be found.
-  const focused = filter.ores.size <= 3;
-  const wt = focused ? 1.8 : 0.8;
+
+  // Every selected vein is drawn the same way, at full weight. There used to be a "focused"
+  // mode that halved line weight and fill once more than three ore types were ticked, on the
+  // theory that it was protecting a clutter budget. It was not: thinning the boxes does not
+  // remove overlap, it just makes the data harder to see, and the user asking for eleven ores
+  // has asked to see eleven ores. Selection is the clutter control.
+  const wt = 1.8;
 
   for (const v of data.veins) {
     if (!filter.ores.has(v.ore)) continue;
@@ -158,7 +197,7 @@ function veinLayer(data, spawn, filter) {
       baseWeight: wt,
       opacity: v.stable ? 0.95 : 0.55,
       fillColor: col,
-      fillOpacity: v.stable ? (focused ? 0.22 : 0.12) : 0.04,
+      fillOpacity: v.stable ? 0.22 : 0.04,
       dashArray: v.stable ? null : '3,3',
       interactive: true,
     });
@@ -683,30 +722,61 @@ const GRIDS = {
   512: { label: 'Region / JourneyMap tile (512)', major: 2 },
 };
 
+// Every Nth line is drawn heavier, so the grid still reads when the fine lines get too dense to
+// tell apart, and there is always an obvious anchor to count from.
+//
+// A pale blue hairline was invisible wherever the map is pale or blue: over water it matched the
+// background hue exactly, and over bright terrain 0.22 opacity at half a pixel was nothing. That
+// is the same problem the vein boxes have, so it gets the same answer -- a dark casing under the
+// line, which buys contrast on ANY background instead of hunting for a hue that works on all of
+// them. Weights also go through VECTOR_SCALE now, so the grid tracks zoom like every other vector
+// layer; it used to be the only one pinned to a fixed hairline.
+// Casing opacities are set by the LIGHT backgrounds, not the dark ones. A light core carries
+// itself over green and water; over pale sand or snow it is the casing that has to do the work,
+// and at 0.30 it could not -- beach sand was the worst case at dE 19 even after the rewrite.
+// 0.42 puts every background above ~26.
+const GRID_MINOR = { colour: '#cfe0ff', w: 0.7, op: 0.5, caseOp: 0.42 };
+const GRID_MAJOR = { colour: '#e8f1ff', w: 1.2, op: 0.8, caseOp: 0.55 };
+const GRID_AXIS = { colour: '#ffffff', w: 1.5, op: 0.9, caseOp: 0.6 };
+
 function gridLayer(bounds, step) {
   const g = L.layerGroup();
   const cfg = GRIDS[step] || GRIDS[512];
   const { x0, z0, x1, z1 } = bounds;
 
-  // Every Nth line is drawn heavier, so the grid still reads when the fine lines get too
-  // dense to tell apart, and there is always an obvious anchor to count from.
-  const line = (a, b, major) =>
-    L.polyline([a, b], {
-      color: major ? '#9fd0ff' : '#7fb2ff',
-      weight: major ? 1.1 : 0.5,
-      opacity: major ? 0.55 : 0.22,
-      interactive: false,
-    });
-
+  const segs = [];
   for (let x = Math.ceil(x0 / step) * step; x <= x1; x += step) {
-    g.addLayer(line(pt(x, z0), pt(x, z1), (x / step) % cfg.major === 0));
+    segs.push([pt(x, z0), pt(x, z1), (x / step) % cfg.major === 0 ? GRID_MAJOR : GRID_MINOR]);
   }
   for (let z = Math.ceil(z0 / step) * step; z <= z1; z += step) {
-    g.addLayer(line(pt(x0, z), pt(x1, z), (z / step) % cfg.major === 0));
+    segs.push([pt(x0, z), pt(x1, z), (z / step) % cfg.major === 0 ? GRID_MAJOR : GRID_MINOR]);
   }
   // The axes through the world origin, which is what every grid coordinate is measured from.
-  const axis = { color: '#ffffff', weight: 1.4, opacity: 0.4, interactive: false };
-  g.addLayer(L.polyline([pt(0, z0), pt(0, z1)], axis));
-  g.addLayer(L.polyline([pt(x0, 0), pt(x1, 0)], axis));
+  segs.push([pt(0, z0), pt(0, z1), GRID_AXIS], [pt(x0, 0), pt(x1, 0), GRID_AXIS]);
+
+  // Casings first, then every line, rather than casing-then-line per segment: interleaved, a
+  // later segment's casing lands on top of an earlier segment's line and dirties every crossing.
+  for (const [a, b, s] of segs) {
+    g.addLayer(
+      L.polyline([a, b], {
+        color: '#0b0d11',
+        weight: (s.w + 1.2) * VECTOR_SCALE,
+        baseWeight: s.w + 1.2,
+        opacity: s.caseOp,
+        interactive: false,
+      })
+    );
+  }
+  for (const [a, b, s] of segs) {
+    g.addLayer(
+      L.polyline([a, b], {
+        color: s.colour,
+        weight: s.w * VECTOR_SCALE,
+        baseWeight: s.w,
+        opacity: s.op,
+        interactive: false,
+      })
+    );
+  }
   return g;
 }

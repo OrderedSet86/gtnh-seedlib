@@ -736,7 +736,8 @@ def _save_climate(cm: dict, path: Path, box) -> None:
     Image.fromarray(rgba, "RGBA").save(path, optimize=True)
 
 
-def render_blocks(region_dir: Path, level_dat: Path, palette: dict, biomes: list, out_dir: Path, name: str):
+def render_blocks(region_dir: Path, level_dat: Path, palette: dict, biomes: list, out_dir: Path, name: str,
+                  roofed: bool = False):
     """Render the true block surface from the world save the probe left behind.
 
     This is the closest thing to a JourneyMap capture that can be produced without a client:
@@ -748,7 +749,9 @@ def render_blocks(region_dir: Path, level_dat: Path, palette: dict, biomes: list
 
     names = W.block_registry(level_dat)
     lookup = W.build_lookup(names, palette)
-    scan = W.scan_world(region_dir, names, lookup, log=lambda m: None)
+    # roofed: the Nether has a bedrock ceiling, so "topmost opaque block" is the roof and the
+    # render comes out a flat slab. See worldrender.scan_world.
+    scan = W.scan_world(region_dir, names, lookup, log=lambda m: None, roofed=roofed)
     rgb, alpha, _ = W.colourise(scan, lookup, palette)
     cov = W.coverage(scan, lookup)
     z0, z1, x0, x1 = _crop_to_content(alpha)
@@ -866,10 +869,21 @@ def main() -> None:
     ap.add_argument("--loot-csv", type=Path)
     ap.add_argument("--veins-ow", type=Path)
     ap.add_argument("--veins-tf", type=Path)
+    ap.add_argument("--veins-nether", type=Path)
     ap.add_argument("--ow-search", type=Path)
     ap.add_argument("--tf-search", type=Path)
+    ap.add_argument("--nether-search", type=Path)
     ap.add_argument("--ow-region", type=Path, help="DIM0 region/ dir from the probe's World")
     ap.add_argument("--tf-region", type=Path, help="DIM7 region/ dir from the probe's World")
+    ap.add_argument("--nether-region", type=Path, help="DIM-1 region/ dir from the probe's World")
+    ap.add_argument(
+        "--nether-portal-ratio",
+        type=float,
+        default=8.0,
+        help="Overworld:Nether coordinate scale. Vanilla 8.0; GTNH exposes it as "
+        "hodgepodge.cfg netherPortalRatio (range 0.125-64), so it is a per-pack value rather "
+        "than a constant. Baked into meta so the viewer never has to guess it.",
+    )
     ap.add_argument("--level-dat", type=Path, help="World/level.dat, for the block registry")
     ap.add_argument(
         "--biomes",
@@ -891,6 +905,7 @@ def main() -> None:
     out = args.out
     (out / "dim0").mkdir(parents=True, exist_ok=True)
     (out / "dim7").mkdir(parents=True, exist_ok=True)
+    (out / "dim-1").mkdir(parents=True, exist_ok=True)
 
     meta: dict = {
         "seed": str(args.seed),  # JS numbers cannot hold a 64-bit seed exactly
@@ -916,7 +931,7 @@ def main() -> None:
         _write(out / "dim0" / "loot.json", loot)
         log(f"loot: {len(loot['chests'])} chests, {len(loot['items'])} distinct items")
 
-    for dim, path in ((0, args.veins_ow), (7, args.veins_tf)):
+    for dim, path in ((0, args.veins_ow), (7, args.veins_tf), (-1, args.veins_nether)):
         if not path:
             continue
         v = veins_from_csv(path)
@@ -936,8 +951,8 @@ def main() -> None:
             log(f"tf features: {len(tf['features'])}")
 
     # Base map render. Needs the palette, so it is built once and shared by both dimensions.
-    searches = [(0, args.ow_search), (7, args.tf_search)]
-    regions = [(0, args.ow_region), (7, args.tf_region)]
+    searches = [(0, args.ow_search), (7, args.tf_search), (-1, args.nether_search)]
+    regions = [(0, args.ow_region), (7, args.tf_region), (-1, args.nether_region)]
     if any(p and p.exists() for _, p in searches + regions):
         biomes_paths = list(args.biomes or [])
         biomes_paths.append(
@@ -964,7 +979,13 @@ def main() -> None:
                     raise SystemExit("--level-dat is required alongside --ow-region/--tf-region")
                 bases.append(
                     render_blocks(
-                        region, args.level_dat, palette, biomes_list, out / f"dim{dim}", f"dim{dim}"
+                        region,
+                        args.level_dat,
+                        palette,
+                        biomes_list,
+                        out / f"dim{dim}",
+                        f"dim{dim}",
+                        roofed=(dim == -1),
                     )
                 )
             if search and search.exists():
@@ -986,6 +1007,17 @@ def main() -> None:
                     "w": max(b["x0"] + b["w"] for b in bases) - min(b["x0"] for b in bases),
                     "h": max(b["z0"] + b["h"] for b in bases) - min(b["z0"] for b in bases),
                 }
+
+    # How this dimension's coordinates relate to the overworld's. The viewer needs it to place
+    # anything anchored to spawn: the overworld spawn sits at spawn/ratio in Nether space, and
+    # using the overworld numbers directly puts the distance rings visibly off centre.
+    #
+    # setdefault, not a membership test: meta["dims"][d] is only created by the base-map block,
+    # so a bundle built from vein data alone (no region, no search) would silently ship without
+    # the scale and the rings would be wrong again. Gated on a Nether input actually being
+    # passed, so an overworld-only bundle does not grow a phantom dimension.
+    if args.veins_nether or args.nether_region or args.nether_search:
+        meta["dims"].setdefault("-1", {})["coordScale"] = args.nether_portal_ratio
 
     _write(out / "meta.json", meta)
     log(f"bundle written to {out}")

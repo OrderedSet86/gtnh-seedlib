@@ -433,8 +433,30 @@ def _meta(level) -> np.ndarray:
     return out
 
 
-def scan_world(region_dir: Path, names: dict[int, str], lookup, log=print) -> dict:
-    """Walk every region file and build per-block surface, height, water and biome grids."""
+# Air blocks required directly above a block for it to count as an exposed floor in a roofed
+# dimension. 3 keeps low overhangs a player can still stand under.
+ROOF_CLEAR = 3
+
+# First y at or above which nothing counts as floor in a roofed dimension. The Nether's bedrock
+# roof is y=127 and everything above it is empty, so "exposed to air above" is satisfied by the
+# TOP FACE of the roof as well as by the floor -- the clearance test alone picks the roof and the
+# map still renders as a bedrock slab. Candidates have to be cut off below it.
+ROOF_Y = 127
+
+
+def scan_world(region_dir: Path, names: dict[int, str], lookup, log=print, roofed: bool = False) -> dict:
+    """Walk every region file and build per-block surface, height, water and biome grids.
+
+    `roofed=True` is for the Nether. The default rule -- topmost opaque block in the column -- is
+    right for a dimension with sky above it and useless for one with a bedrock ceiling: there the
+    topmost opaque block is always the roof, so the map renders as a flat bedrock slab at y=127
+    with no terrain visible at all.
+
+    Roofed mode takes the topmost opaque block that has {ROOF_CLEAR} non-opaque blocks directly
+    above it -- the floor a player walking the dimension actually sees. That keeps ledges,
+    netherrack shelves and the surface of lava seas, and rejects the ceiling because bedrock sits
+    directly on the netherrack up there.
+    """
     rgb_tbl, tint_tbl, known_tbl, skip_tbl, water_tbl, meta_tables = lookup
 
     files = sorted(region_dir.glob("r.*.mca"))
@@ -477,8 +499,37 @@ def scan_world(region_dir: Path, names: dict[int, str], lookup, log=print) -> di
             wtop = np.where(wcol, 255 - np.argmax(is_water[::-1], axis=0), 0)
 
             opaque = ~skip_tbl[blocks] & ~is_water
-            ocol = opaque.any(axis=0)
-            otop = np.where(ocol, 255 - np.argmax(opaque[::-1], axis=0), 0)
+            if roofed:
+                # Exposed floor: opaque, with ROOF_CLEAR non-opaque directly above. Shift the
+                # opacity stack down k times and require all of those to be clear.
+                clear = np.ones_like(opaque)
+                for k in range(1, ROOF_CLEAR + 1):
+                    above = np.zeros_like(opaque)
+                    above[:-k] = opaque[k:]
+                    above[-k:] = False  # off the top of the column reads as open sky
+                    clear &= ~above
+                exposed = opaque & clear
+                # Clearance is computed against the REAL column above (so a block tucked under
+                # the roof slab is correctly rejected), but only positions below the roof may be
+                # chosen as the surface.
+                exposed[ROOF_Y:] = False
+                ecol = exposed.any(axis=0)
+                etop = np.where(ecol, 255 - np.argmax(exposed[::-1], axis=0), 0)
+
+                # Fallback for columns of solid rock from floor to roof: no position has headroom,
+                # so there is no walkable floor to show. Use the topmost opaque block below the
+                # roof instead of leaving a hole -- "solid rock up to here" is the true answer and
+                # renders as filled ground, where a hole would read as unexplored.
+                sub = opaque.copy()
+                sub[ROOF_Y:] = False
+                scol = sub.any(axis=0)
+                stop = np.where(scol, 255 - np.argmax(sub[::-1], axis=0), 0)
+
+                ocol = ecol | scol
+                otop = np.where(ecol, etop, stop)
+            else:
+                ocol = opaque.any(axis=0)
+                otop = np.where(ocol, 255 - np.argmax(opaque[::-1], axis=0), 0)
 
             zz, xx = np.meshgrid(np.arange(16), np.arange(16), indexing="ij")
             ids = blocks[otop, zz, xx]

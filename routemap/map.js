@@ -6,7 +6,16 @@ const QS = new URLSearchParams(location.search);
 const BUNDLE = QS.get('world') || '-1636594104014467454';
 const ROOT = `../worlds/${BUNDLE}`;
 
-const DIM_NAMES = { 0: 'Overworld', 7: 'Twilight Forest' };
+const DIM_NAMES = { '-1': 'Nether', 0: 'Overworld', 7: 'Twilight Forest' };
+
+// Tab order. A plain .sort() on the keys is a STRING sort, which puts '-1' before '0' and opens
+// the map on the Nether; travel order is what a reader expects.
+const DIM_ORDER = ['0', '-1', '7'];
+const dimKeys = (m) =>
+  Object.keys(m).sort((a, b) => {
+    const ia = DIM_ORDER.indexOf(a), ib = DIM_ORDER.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+  });
 
 const state = {
   meta: null,
@@ -88,7 +97,7 @@ async function boot() {
   buildDimButtons();
   bindChrome();
 
-  const dims = Object.keys(state.meta.dims).sort();
+  const dims = dimKeys(state.meta.dims);
   const want = QS.get('dim');
   await setDim(dims.includes(want) ? Number(want) : dims.includes('0') ? 0 : Number(dims[0]));
 }
@@ -147,7 +156,7 @@ function renderCaveats() {
 function buildDimButtons() {
   const el = $('dims');
   el.innerHTML = '';
-  for (const d of Object.keys(state.meta.dims).sort()) {
+  for (const d of dimKeys(state.meta.dims)) {
     const b = document.createElement('button');
     b.textContent = DIM_NAMES[d] || `DIM${d}`;
     b.dataset.dim = d;
@@ -158,6 +167,9 @@ function buildDimButtons() {
 
 async function setDim(dim) {
   state.dim = dim;
+  // Before anything reads a colour: the ore list, its legend swatches and the vein boxes all go
+  // through oreColour(), and the Nether overrides the warm half of the palette.
+  setOreDim(dim);
   for (const b of $('dims').children) b.classList.toggle('on', Number(b.dataset.dim) === dim);
 
   if (!state.data[dim]) {
@@ -172,9 +184,17 @@ async function setDim(dim) {
     state.data[dim] = d;
   }
 
-  // Spawn is only meaningful in the overworld, but the TF report reuses the same centre, so
-  // distance rings and "from spawn" numbers stay comparable across dimensions.
-  state.spawn = state.meta.spawn || { x: 0, y: 64, z: 0 };
+  // Spawn is only meaningful in the overworld, but every dimension anchors its rings, its
+  // opening view and its "from spawn" numbers to the point that CORRESPONDS to spawn.
+  //
+  // That is not the same coordinate everywhere. The Twilight Forest is 1:1 with the overworld,
+  // so reusing the overworld numbers is right there -- but the Nether is 1:8, and using them
+  // literally put the distance rings ~130 blocks off centre, which is visible on the map. The
+  // ratio is a pack config (hodgepodge netherPortalRatio), so the bundle carries it rather than
+  // the viewer assuming 8.
+  const sp = state.meta.spawn || { x: 0, y: 64, z: 0 };
+  const scale = (state.meta.dims[String(dim)] || {}).coordScale || 1;
+  state.spawn = { x: Math.round(sp.x / scale), y: sp.y, z: Math.round(sp.z / scale) };
 
   resetFilters();
   buildBaseButtons();
@@ -245,6 +265,9 @@ function fitDimInner() {
 const DEFAULT_ORES = {
   0: ['lapis', 'mica'],
   7: ['terraaer', 'perditioordo', 'aquaignis'], // the Twilight Forest shard mixes
+  // The Nether carries 11 mixes; these are the ones worth crossing a portal for. Molybdenum is
+  // the rarest by an order of magnitude (9 regions in r60 on the reference seed vs 347 for iron).
+  '-1': ['molybdenum', 'beryllium', 'sulfur'],
 };
 
 function resetFilters() {
