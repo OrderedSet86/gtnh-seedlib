@@ -1,0 +1,84 @@
+name: Deploy route map to Pages
+
+# Publishes routemap/ plus the worlds/ bundles as a static site.
+#
+# This deploys through an ARTIFACT rather than by publishing a branch, and that is not a style
+# preference: branch-published Pages sites are built from a `git archive`, which contains LFS
+# pointer files rather than their contents, so the base map rasters and loot.json would be
+# served as ~130 bytes of pointer text and the map would come up blank. Uploading an artifact
+# of the checked-out working tree ships the real bytes. It also means visitor traffic never
+# touches Git LFS, so the site cannot burn through the LFS bandwidth quota.
+
+on:
+  push:
+    branches: [main]
+    # Only the published files matter; a change to the Streamlit browser or the corpora should
+    # not trigger a redeploy.
+    paths:
+      - 'routemap/**'
+      - 'worlds/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it: a half-published site is worse than a
+# slightly stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out without LFS
+        uses: actions/checkout@v4
+        with:
+          # Deliberately NOT lfs: true. That would fetch every LFS object in the repo -- some
+          # 264 MB, almost all of it seed-corpus tarballs the site never serves. The next step
+          # pulls only what is published.
+          lfs: false
+
+      - name: Fetch only the LFS objects the site serves
+        run: |
+          git lfs install --local
+          git lfs pull --include="worlds/**"
+          # Fail loudly rather than publishing pointer stubs as if they were images.
+          if head -c 40 worlds/*/dim0/base-blocks.png | grep -q 'git-lfs'; then
+            echo "::error::LFS objects were not resolved; the site would serve pointer files."
+            exit 1
+          fi
+
+      - name: Assemble the site
+        run: |
+          mkdir -p _site
+          cp -r routemap worlds _site/
+          # Disable Jekyll: it is not used here, and it silently drops paths it considers
+          # special.
+          touch _site/.nojekyll
+          # The app lives at /routemap/; send the site root there so the published URL works.
+          cat > _site/index.html <<'HTML'
+          <!DOCTYPE html>
+          <meta charset="utf-8">
+          <title>GTNH route map</title>
+          <meta http-equiv="refresh" content="0; url=routemap/">
+          <link rel="canonical" href="routemap/">
+          <p><a href="routemap/">GTNH route map</a></p>
+          HTML
+          du -sh _site
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

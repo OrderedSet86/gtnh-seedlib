@@ -338,6 +338,13 @@ function checkList(el, items, selected, onChange, opts = {}) {
 function buildOreList() {
   const v = state.data[state.dim].veins;
   $('veincount').textContent = v ? `${v.veins.length}` : '';
+
+  // Route instability was a property of the jar that generated the data, not of the map. Once
+  // a bundle has none, the filter is dead UI -- hide it rather than offer a checkbox that
+  // cannot change anything. The layer code still honours it for bundles that do.
+  const unstable = v ? v.unstable : 0;
+  $('veinunstable').parentElement.hidden = !unstable;
+  if (!unstable) state.veins.unstable = true;
   if (!v) {
     checkList($('oreList'), [], state.veins.ores, drawVeins, { empty: 'No vein export for this dimension.' });
     return;

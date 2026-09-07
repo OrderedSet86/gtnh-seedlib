@@ -300,18 +300,41 @@ changes between pack versions, so expect one bundle per seed per version. The
 `.gitattributes` rules are glob-based over `worlds/**`, so a new bundle is
 routed to LFS correctly without touching them.
 
+### Publishing to GitHub Pages
+
+`.github/workflows/pages.yml` publishes `routemap/` and `worlds/` on every push
+to `main` that touches them. To turn it on: **Settings → Pages → Source →
+GitHub Actions**, then push (or run the workflow manually from the Actions tab).
+The site lands at `https://<user>.github.io/<repo>/`, which redirects to
+`/routemap/`. Pages on a private repo needs a paid plan.
+
+It deploys through an *artifact* rather than by publishing a branch, and that is
+load-bearing: branch-published Pages sites are built from a `git archive`, which
+contains LFS **pointer files** rather than their contents, so the base rasters
+and `loot.json` would be served as ~130 bytes of text and the map would come up
+blank. Uploading the checked-out tree ships real bytes. It also keeps visitor
+traffic off Git LFS entirely, so the site cannot exhaust the LFS bandwidth quota.
+
+The workflow checks out with `lfs: false` and then runs
+`git lfs pull --include="worlds/**"`, because `lfs: true` would fetch every LFS
+object in the repo — about 264 MB, nearly all of it seed-corpus tarballs the site
+never serves — instead of the ~11 MB it publishes. It then hard-fails if the
+rasters still look like pointer files, rather than publishing a blank map.
+
 Layers, all toggleable, for both the Overworld and the Twilight Forest:
 
 - **Base** — three renders, all at 1 px per block. *Blocks* is the default and
   the most faithful: the true surface material of every generated block, read
   out of the world save. *Biome* and *Topo* are cheaper derivations from the
   search report.
-- **Ore veins** — one box per vein at its true bounding box, filtered by ore
-  and by distance. Veins that differed between a rows walk and a spiral walk
-  are **hidden by default** and drawn dashed when enabled: GT vein placement is
-  not route-stable on this pack, so those coordinates may simply not be there,
-  and a map should not put them in front of you unasked. 113 of 1254 in the
-  Overworld, 182 of 1213 in the Twilight Forest.
+- **Ore veins** — one box per vein at its true bounding box, filtered by ore and
+  by distance. 1256 in the Overworld, 1220 in the Twilight Forest. If a bundle
+  contains veins that differed between a rows walk and a spiral walk of the same
+  seed, they are hidden by default and drawn dashed when switched on, with the
+  reason in the popup; the control only appears when there are such veins. The
+  current bundle has none — route instability was a property of the generating
+  jar and has been fixed upstream — but the mechanism stays, because it is a
+  claim about a *bundle*, not about the map.
 - **Loot** — by chest (sized and coloured by value) or by item, where picking
   an item lights up every chest containing it. Chest popups carry the
   exporter's own `/tp`, which is not the chest's raw coordinates: for an exact

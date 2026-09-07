@@ -11,6 +11,11 @@
 
 * { box-sizing: border-box; }
 
+/* The [hidden] attribute only carries `display: none` from the UA stylesheet, so any explicit
+   display here silently beats it -- label.chk is display:flex, which left hidden controls on
+   screen while their .hidden property read true. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;
