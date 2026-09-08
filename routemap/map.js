@@ -449,9 +449,18 @@ function buildItemList() {
   if (!q) names = names.concat(Object.keys(l.items).slice(0, 40));
   names = [...new Set(names)].slice(0, 200);
 
+  // The number is the total quantity in the world; the hover says how many chests that is
+  // spread across, which is what actually lights up on the map.
   checkList(
     $('itemList'),
-    names.map((n) => ({ key: n, label: n, n: l.items[n] })),
+    names.map((n) => ({
+      key: n,
+      label: n,
+      n: l.items[n].toLocaleString(),
+      title: `${l.items[n].toLocaleString()} in total, across ${(
+        (l.item_chests || {})[n] || 0
+      ).toLocaleString()} chests`,
+    })),
     state.loot.items,
     drawLoot,
     { empty: 'No match.' }

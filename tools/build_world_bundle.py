@@ -341,17 +341,23 @@ def loot_from_csv(path: Path) -> dict:
                 "gate": r.get("min_gate_item") == "yes",
             }
         )
+        items[name] = items.get(name, 0) + int(r["count"] or 0)
 
-    # Count chests per item, not stacks: on a map the useful number is how many points light
-    # up when you select the item, and a chest can hold several stacks of the same thing.
+    # `items` is the TOTAL QUANTITY of each item across the world -- 2158 Bronze Ingots, not
+    # the 232 stacks they come in or the 119 chests holding them. That is what "how much of
+    # this is out there" means to anyone reading it, and it ranks differently: Bronze Ingot is
+    # the most abundant ingot by quantity but only third by chest count. `item_chests` keeps
+    # the chest count for the hover, since that is how many markers light up when you pick it.
+    item_chests: dict[str, int] = {}
     for c in chests.values():
         for name in c.pop("_names"):
-            items[name] = items.get(name, 0) + 1
+            item_chests[name] = item_chests.get(name, 0) + 1
 
     out = sorted(chests.values(), key=lambda c: -c["val"])
     return {
         "chests": out,
         "items": dict(sorted(items.items(), key=lambda kv: (-kv[1], kv[0]))),
+        "item_chests": item_chests,
         "sources": _counts(c["src"] for c in out),
         "yconf": _counts(c["yconf"] for c in out),
     }
@@ -972,6 +978,11 @@ def main() -> None:
 
         # "Blocks" first: it is the most faithful layer, so it is the one the map opens on.
         for (dim, region), (_, search) in zip(regions, searches):
+            # A dimension with no inputs this run is left alone entirely -- see the meta merge
+            # at the end. Creating an empty entry here is what silently reduced a previously
+            # built Nether to a dimension button with no layers behind it.
+            if not (region and region.exists()) and not (search and search.exists()):
+                continue
             d = meta["dims"].setdefault(str(dim), {})
             bases = d.setdefault("bases", [])
             if region and region.exists():
@@ -1018,6 +1029,20 @@ def main() -> None:
     # passed, so an overworld-only bundle does not grow a phantom dimension.
     if args.veins_nether or args.nether_region or args.nether_search:
         meta["dims"].setdefault("-1", {})["coordScale"] = args.nether_portal_ratio
+
+    # Carry forward any dimension this run had no inputs for. Bundles are built a dimension at
+    # a time -- each needs its own probe run, since a run only populates one properly -- so a
+    # rebuild of the Overworld must not delete the Nether that was built yesterday.
+    prev_meta = out / "meta.json"
+    if prev_meta.exists():
+        try:
+            prev = json.loads(prev_meta.read_text()).get("dims", {})
+        except (ValueError, OSError):
+            prev = {}
+        for key, val in prev.items():
+            if key not in meta["dims"] and val.get("bases"):
+                meta["dims"][key] = val
+                log(f"  kept existing dim{key} ({len(val['bases'])} base layers, not rebuilt)")
 
     _write(out / "meta.json", meta)
     log(f"bundle written to {out}")

@@ -35,7 +35,8 @@ worlds/
   -1636594104014467454/                  # one baked bundle per seed per pack version
     meta.json                            #   bounds, layer manifest, provenance, caveats
     palette.json                         #   biome id -> map colour + vanilla grass/foliage tints
-    dim0/  dim7/                         #   *.png + loot.json are LFS; veins.json and
+    dim0/ dim-1/ dim7/                   #   one per dimension: Overworld, Nether, Twilight
+                                         #   Forest. *.png + loot.json are LFS; veins.json and
                                          #   pois.json are text, one record per line
 routemap/                                # static Leaflet world map (see "Route map")
 tools/
@@ -318,18 +319,29 @@ traffic off Git LFS entirely, so the site cannot exhaust the LFS bandwidth quota
 The workflow checks out with `lfs: false` and then runs
 `git lfs pull --include="worlds/**"`, because `lfs: true` would fetch every LFS
 object in the repo — about 264 MB, nearly all of it seed-corpus tarballs the site
-never serves — instead of the ~11 MB it publishes. It then hard-fails if the
+never serves — instead of the ~13 MB it publishes. It then hard-fails if the
 rasters still look like pointer files, rather than publishing a blank map.
 
-Layers, all toggleable, for both the Overworld and the Twilight Forest:
+Layers, all toggleable, per dimension. A dimension only carries the layers its
+bundle was actually built with, and the panel says so rather than showing an
+empty list:
 
-- **Base** — three renders, all at 1 px per block. *Blocks* is the default and
-  the most faithful: the true surface material of every generated block, read
+| | base renders | veins | loot | POIs | climate |
+|---|---|---|---|---|---|
+| Overworld | Blocks, Biome, Topo | 1256 | 1044 chests | villages, dungeons, strongholds, witchery, squares | yes |
+| Nether | Blocks | 1252 | — | — | yes |
+| Twilight Forest | Blocks, Biome, Topo | 1220 | — | 256 named structures | yes |
+
+- **Base** — up to three renders, all at 1 px per block. *Blocks* is the default
+  and the most faithful: the true surface material of every generated block, read
   out of the world save. *Biome* and *Topo* are cheaper derivations from the
-  search report.
+  search report, so a dimension built from region files alone (the Nether here)
+  offers Blocks only.
 - **Ore veins** — one box per vein at its true bounding box, filtered by ore and
-  by distance. 1256 in the Overworld, 1220 in the Twilight Forest. If a bundle
-  contains veins that differed between a rows walk and a spiral walk of the same
+  by distance. Each dimension opens on the few ores worth routing to rather than
+  all of them at once — lapis and mica in the Overworld, the three shard mixes in
+  the Twilight Forest — because 1250 overlapping boxes is a mesh you cannot read
+  anything out of. If a bundle contains veins that differed between a rows walk and a spiral walk of the same
   seed, they are hidden by default and drawn dashed when switched on, with the
   reason in the popup; the control only appears when there are such veins. The
   current bundle has none — route instability was a property of the generating
@@ -393,24 +405,32 @@ cache that is safe to delete:
 tools/build_world_bundle.py --seed <seed> --pack <pack> \
   --prefilter <sweep.jsonl> --loot-csv <loot.csv> \
   --veins-ow <veins-overworld.csv> --veins-tf <veins-tf.csv> \
-  --ow-search <search-report.json> --tf-search <search-report.json> \
+  --veins-nether <veins-nether.csv> \
+  --ow-search <report.json> --tf-search <report.json> --nether-search <report.json> \
   --ow-region <World/region> --tf-region <World/DIM7/region> \
+  --nether-region <World/DIM-1/region> --nether-portal-ratio 8 \
   --level-dat <World/level.dat> \
-  --biomes <biomes.json> --jm-dir <journeymap/data/sp/WORLD> \
+  --biomes <biomes.json> --mc-jar <minecraft-1.7.10-client.jar> \
   --out worlds/<seed>
 ```
 
 Every input is optional — pass what exists and the rest of the layers are
-skipped.
+skipped. **A dimension you pass nothing for is left exactly as it was**, not
+deleted: bundles are built a dimension at a time because a probe run only
+populates one properly, so rebuilding the Overworld must not drop the Nether
+built yesterday. The build prints `kept existing dim-1 (…, not rebuilt)` when
+it carries one forward.
 
 **Getting the inputs.** `gtnh-determinism/scripts/run-probe.sh` with
-`PROBE_SEARCH=true` (add `PROBE_DIM=7 PROBE_TFFEATURES=4` for the Twilight
-Forest) writes the search report; about three minutes each at radius 60. The
-same run also leaves a real, fully populated world in `<server>/World`, which
-is where the Blocks layer comes from — copy `region/` and `level.dat` out
-before the next run, because every run starts with `rm -rf World`. Since one
-run only populates one dimension properly, the Overworld and Twilight Forest
-saves have to be captured from separate runs.
+`PROBE_SEARCH=true` writes the search report; about three minutes each at radius
+60. Add `PROBE_DIM=7 PROBE_TFFEATURES=4` for the Twilight Forest, or
+`PROBE_DIM=-1` for the Nether. The same run also leaves a real, fully populated
+world in `<server>/World`, which is where the Blocks layer comes from — copy the
+region directory (`region/`, `DIM-1/region/` or `DIM7/region/`) and `level.dat`
+out before the next run, because every run starts with `rm -rf World`. One run
+only populates one dimension properly, so each dimension is a separate run and a
+separate capture — which is why the builder never deletes a dimension it was not
+given inputs for.
 
 Ore veins do *not* come from the search report — on GT 5.09.54.x worldgen ores
 have no tile entities, so the report's ore census reads empty rather than zero,
@@ -460,6 +480,14 @@ which is worth knowing before touching the palette:
   JourneyMap's own luminance over 91k single-colour red-sand pixels gives
   `+18.0*dh/dx +17.5*dh/dz` on a base of 94.8: near-equal coefficients, so NW at
   45°, and a relative gain of 0.19 against the 0.18 used here.
+- **A roofed dimension needs a different surface rule.** "Topmost opaque block
+  in the column" is right for anything with sky above it and useless for the
+  Nether, whose bedrock ceiling at y 127 *is* the topmost block everywhere — the
+  map renders as one flat slab. `scan_world(roofed=True)` instead takes the
+  topmost block with three non-opaque blocks above it, which is the floor a
+  player actually walks on, and cuts candidates off below the roof: "exposed to
+  air above" is otherwise satisfied by the top face of the ceiling too, so the
+  clearance test alone still picks it.
 
 All four were found by measuring this renderer against real JourneyMap captures
 of the same world, which after the fixes agrees to a mean absolute channel error
@@ -476,6 +504,14 @@ per-block). And there is no per-block water field in any report format — the
 water mask is derived per chunk from the identity `waterY[y] == count(surf < y)`,
 which holds for open water and fails for cave water, which is how the two are
 told apart. The Blocks layer has neither limit: it reads both from the save.
+
+**Dimensions are not all 1:1 with the Overworld.** The Twilight Forest is, so
+reusing the Overworld spawn for the distance rings and every "from spawn" figure
+is correct there. The Nether is 1:8, and using them literally put the rings about
+130 blocks off centre — visibly wrong on the map. The ratio is pack config
+(`hodgepodge.cfg` `netherPortalRatio`, which GTNH allows anywhere from 0.125 to
+64), so `--nether-portal-ratio` bakes it into `meta.json` as `coordScale` and the
+viewer divides by it rather than assuming 8.
 
 ## Querying
 
