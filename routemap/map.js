@@ -442,11 +442,17 @@ function buildItemList() {
   const l = state.data[state.dim].loot;
   if (!l) return;
   const q = state.loot.search.trim().toLowerCase();
+  // Sort by quantity rather than trusting key order. loot.json is WRITTEN most-numerous-first, but
+  // Object.keys hoists integer-like keys ahead of everything else in ascending numeric order, so any
+  // item whose display name is a bare number jumps to the top of the list however rare it is. GTNH
+  // has such items — renamed sticks called "0".."7", lore "Weak signal logic unit", found in droppers
+  // — and they were displacing eight genuine entries from the default view.
+  const byQty = Object.keys(l.items).sort((a, b) => (l.items[b] || 0) - (l.items[a] || 0));
   // Always show what is already selected, so a filter cannot hide an active choice.
-  let names = Object.keys(l.items).filter(
+  let names = byQty.filter(
     (n) => state.loot.items.has(n) || (q && n.toLowerCase().includes(q))
   );
-  if (!q) names = names.concat(Object.keys(l.items).slice(0, 40));
+  if (!q) names = names.concat(byQty.slice(0, 40));
   names = [...new Set(names)].slice(0, 200);
 
   // The number is the total quantity in the world; the hover says how many chests that is
@@ -547,7 +553,8 @@ function drawPois() {
   const { areas, markers } = poiLayers(
     state.data[state.dim].features,
     state.spawn,
-    state.pois
+    state.pois,
+    state.data[state.dim].loot
   );
   swap('poiAreas', areas);
   swap('poiMarkers', markers);

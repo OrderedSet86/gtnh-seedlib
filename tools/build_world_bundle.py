@@ -92,6 +92,19 @@ def load_prefilter(path: Path, seed: int) -> dict:
     raise SystemExit(f"seed {seed} not found in {path}")
 
 
+def _dungeon_centre(d: dict) -> list | None:
+    """[x, y, z] median of a roguelike dungeon's predicted chest positions, or None if it has none.
+
+    Median rather than mean: a dungeon's wings are not symmetric, and one long corridor drags a mean
+    outside the structure entirely.
+    """
+    pts = [c["pos"] for c in (d.get("chests") or []) if c.get("pos")]
+    if not pts:
+        return None
+    mid = lambda i: sorted(p[i] for p in pts)[len(pts) // 2]  # noqa: E731
+    return [mid(0), mid(1), mid(2)]
+
+
 def pois_from_prefilter(rec: dict) -> dict:
     spawn = rec.get("spawn") or [0, 64, 0]
     out: dict = {"spawn": {"x": spawn[0], "y": spawn[1], "z": spawn[2]}}
@@ -132,6 +145,12 @@ def pois_from_prefilter(rec: dict) -> dict:
                 "cx": cx,
                 "cz": cz,
                 "n_chests": len(d.get("chests") or []),
+                # Where the dungeon actually STANDS, as distinct from where you must stand to make
+                # it exist. Median of its chest positions, which is stable against one outlying wing.
+                # Without this the map marks only the trigger, and a player looking at the tower —
+                # measured 72 blocks from its trigger on the ENIKO nearest spawn on
+                # -1636594104014467454 — sees nothing there and concludes the dungeon is missing.
+                "centre": _dungeon_centre(d),
                 "enchant_tables": d.get("enchant_tables") or [],
             }
         )
@@ -344,11 +363,34 @@ Y_CONF = {
 }
 
 
+def load_value_table(path: Path):
+    """Item -> points, from the speedrun scoring sheet.
+
+    The loot CSV already carries `unit_value`/`stack_value`/`chest_value`, but those are frozen
+    at whatever table the export was run against, and there is no way to tell from the file
+    which one that was. That is how Rubber Bar ended up worth 0 on the map long after it was
+    given a value: the sheet moved and the export did not. Passing the table here rescopes the
+    question to "which sheet do you want" instead of "which sheet was this CSV built with".
+
+    Parsing is delegated to browser/lootscore.py, the vendored copy of the canonical ranker in
+    gtnh-determinism -- section-sign colour codes, duplicate rows and float values all have
+    established handling there, and a third implementation of those rules would be one too many.
+    """
+    sys.path.insert(0, str(REPO / "browser"))
+    import lootscore
+
+    with path.open(newline="") as fh:
+        values, limits, _mins, _display, problems = lootscore.parse_value_rows(csv.DictReader(fh))
+    for p in problems:
+        log(f"  value table: {p}")
+    return values, limits, lootscore.norm
+
+
 def tpCmd(r: dict) -> str:
     return f"/tp {r['x']} {int(r['y']) + 1} {r['z']}"
 
 
-def loot_from_csv(path: Path) -> dict:
+def loot_from_csv(path: Path, table=None) -> dict:
     chests: dict[str, dict] = {}
     items: dict[str, int] = {}
     for r in csv.DictReader(path.open(newline="")):
@@ -403,6 +445,41 @@ def loot_from_csv(path: Path) -> dict:
     for c in chests.values():
         for name in c.pop("_names"):
             item_chests[name] = item_chests.get(name, 0) + 1
+
+    if table:
+        values, limits, tnorm = table
+        scored = missing = 0
+        unpriced: dict[str, int] = {}
+        for c in chests.values():
+            for i in c["items"]:
+                v = values.get(tnorm(i["n"]))
+                if v is None:
+                    missing += 1
+                    unpriced[i["n"]] = unpriced.get(i["n"], 0) + i["c"]
+                    i["v"] = 0
+                else:
+                    scored += 1
+                    i["v"] = int(round(v * i["c"]))
+                    # `limit` caps how much of an item can score for the run as a whole, not
+                    # per chest, so it is carried for display rather than applied here: two
+                    # chests each holding the cap are both worth the trip until you have been
+                    # to one of them.
+                    lim = limits.get(tnorm(i["n"]))
+                    if lim:
+                        i["lim"] = lim
+            c["val"] = sum(i["v"] for i in c["items"])
+        log(f"loot: rescored {scored:,} stacks from the value table, {missing:,} unpriced")
+        top = sorted(unpriced.items(), key=lambda kv: -kv[1])[:5]
+        if top:
+            log("  most common unpriced: " + ", ".join(f"{n} x{q}" for n, q in top))
+
+    # Sort each chest's stacks by value. They arrive in slot order, which is not information
+    # anyone reads -- the slot number is not even shown -- and it buries the point: the
+    # 20,000-point chest here opened with Grass, Gravel, Gravel before its Alumite plates, and
+    # 1256 of 1729 chests led with something that was not their best stack. Sorting also means
+    # the popup's display cap drops the junk rather than the prize.
+    for c in chests.values():
+        c["items"].sort(key=lambda i: (-i["v"], -i["c"], i["n"]))
 
     out = sorted(chests.values(), key=lambda c: -c["val"])
     return {
@@ -928,6 +1005,12 @@ def main() -> None:
                          "adds the POI kinds stage 0 cannot predict (Thaumcraft hilltop circles and "
                          "barrows, vanilla WorldGenDungeons rooms)")
     ap.add_argument("--loot-csv", type=Path)
+    ap.add_argument(
+        "--value-table",
+        type=Path,
+        help="Speedrun scoring sheet (Item,Value,Limit,Min). Recomputes every stack and chest "
+        "value instead of trusting the ones frozen into the loot CSV.",
+    )
     ap.add_argument("--veins-ow", type=Path)
     ap.add_argument("--veins-tf", type=Path)
     ap.add_argument("--veins-nether", type=Path)
@@ -996,7 +1079,10 @@ def main() -> None:
             f"{len(fg['vanilla_dungeons'])} vanilla dungeons")
 
     if args.loot_csv:
-        loot = loot_from_csv(args.loot_csv)
+        table = load_value_table(args.value_table) if args.value_table else None
+        loot = loot_from_csv(args.loot_csv, table)
+        if args.value_table:
+            meta["value_table"] = args.value_table.name
         _write(out / "dim0" / "loot.json", loot)
         log(f"loot: {len(loot['chests'])} chests, {len(loot['items'])} distinct items")
 

@@ -233,8 +233,19 @@ const YCONF_STYLE = {
   sky: { color: '#e05c5c', weight: 1.4, dash: '2,3' },
 };
 
-// contents_confidence values that mean "nothing is wrong" and so are not worth a line.
-const QUIET_CONFIDENCE = new Set(['cross-env verified', 'predicted', 'exact', '']);
+/* Which contents_confidence values are worth a line in the popup.
+ *
+ * This tests for PROBLEMS rather than listing the values that are fine, because the set of
+ * fine values keeps changing: it was "cross-env verified"/"predicted", and a regenerated
+ * bundle made it "full-generation" on all 1729 chests -- which an enumerate-the-good-ones
+ * list would have flagged as a warning on every chest, the exact noise the check exists to
+ * avoid. Failing quiet is the right way round here: a `note` accompanies the real problems,
+ * and an unflagged caveat is better than a caveat on everything, which trains you to skip it.
+ */
+const CONFIDENCE_WARNING = /unknown|depend|varies|partial|NOT\b|absent|unpredict/i;
+
+const isConfidenceCaveat = (conf, note) =>
+  Boolean(note) || Boolean(conf && CONFIDENCE_WARNING.test(conf));
 
 const YCONF_TEXT = {
   exact: 'Y is exact.',
@@ -322,11 +333,7 @@ function lootPopup(c, matched, spawn) {
   if (c.yconf !== 'exact') {
     h += `<div class="warn">${esc(YCONF_TEXT[c.yconf] || c.ynote)}</div>`;
   }
-  // Only surface contents_confidence when it is actually a caveat. "cross-env verified" and
-  // "predicted" are the normal, healthy states and cover 997 of 1044 chests here -- printing
-  // them as a warning on almost every chest trains you to ignore the line, which is exactly
-  // when the 47 that do mean something get missed.
-  if (c.conf && !QUIET_CONFIDENCE.has(c.conf)) {
+  if (isConfidenceCaveat(c.conf, c.note)) {
     h += `<div class="warn">${esc(c.conf)}${c.note ? ` &mdash; ${esc(c.note)}` : ''}</div>`;
   }
 
@@ -355,36 +362,33 @@ const POI_KINDS = [
   { key: 'dungeon-PYRAMID', label: 'Dungeon PYRAMID', colour: '#ff9d5c' },
   { key: 'dungeon-ENIKO', label: 'Dungeon ENIKO', colour: '#ff6ad5' },
   { key: 'enchant-table', label: 'Enchanting table', colour: '#b98cff' },
+  {
+    key: 'dungeon-site',
+    label: 'Roguelike dungeon (structure)',
+    colour: '#ffd27f',
+    about: 'Where the dungeon actually stands. The trigger marker is where you must stand to make ' +
+      'it generate — the two can be over 200 blocks apart.',
+  },
   { key: 'stronghold', label: 'Stronghold', colour: '#8fd4ff' },
   {
     key: 'hilltop-circle',
     label: 'Thaumcraft hilltop circle',
     colour: '#c86bff',
-    about:
-      'A ring of obsidian totems on high ground, with a single chest on a one-block pedestal at ' +
-      'the centre, a mob spawner directly under it and an aura node three above. Loot rolls the ' +
-      'dungeonChest table twice, so it is roughly double a vanilla dungeon chest. Observed from a ' +
-      'full-generation run, not predicted: stage 0 has no entry for Thaumcraft outer-world ' +
-      'structures, so these appear on the map only because the world was generated.',
+    about: 'Obsidian ring, chest on a pedestal at the centre, spawner beneath, aura node above. ' +
+      'Rolls dungeonChest twice.',
   },
   {
     key: 'barrow',
     label: 'Thaumcraft barrow',
     colour: '#a8763f',
-    about:
-      'A burial mound with crates, urns and a chest. Same provenance as hilltop circles — ' +
-      'observed, not predicted. This seed has none inside the mapped radius.',
+    about: 'Burial mound with crates, urns and a chest.',
   },
   {
     key: 'vanilla-dungeon',
     label: 'Vanilla dungeon',
     colour: '#8a8a8a',
     off: true,
-    about:
-      'A mossy-cobble spawner room with one or two chests. Numerous — several hundred in this ' +
-      'radius — so it is off by default to keep the map readable. Existence became a pure ' +
-      'function of the seed in gtnhdeterminism 0.11; before that it depended on the route the ' +
-      'player took.',
+    about: 'Mossy-cobble spawner room with one or two chests. Off by default — several hundred here.',
   },
   {
     key: 'witchery-Coven',
@@ -486,6 +490,17 @@ function poiFeatures(pois) {
       y: 100,
       dungeon: d,
     });
+    if (d.centre) {
+      out.push({
+        kind: 'dungeon-site',
+        name: `Dungeon ${d.tower} (structure)`,
+        x: d.centre[0],
+        y: d.centre[1],
+        z: d.centre[2],
+        dungeon: d,
+        site: true,
+      });
+    }
     for (const e of d.enchant_tables || []) {
       out.push({
         kind: 'enchant-table',
@@ -551,7 +566,18 @@ function poiFeatures(pois) {
  *
  * See VECTOR_STACK in map.js for the order they are put back in.
  */
-function poiLayers(features, spawn, enabled) {
+// POI kinds whose marker sits exactly ON the container, so the popup can inline the loot. The POI
+// layer draws above the loot layer, so without this the marker hides the very thing the player came
+// for. Hilltop circles qualify: the POI position IS the chest.
+//
+// vanilla-dungeon does NOT qualify, despite also being a chest structure — its POI position is the
+// attempt anchor passed to WorldGenDungeons.generate, and the chest sits offset inside the room.
+// Verified: 19/20 hilltop POIs resolve to a chest at the exact position, 0/318 dungeon POIs do.
+const POI_IS_CHEST = new Set(['hilltop-circle']);
+
+function poiLayers(features, spawn, enabled, loot) {
+  const chestAt = new Map();
+  if (loot) for (const c of loot.chests) chestAt.set(`${c.x},${c.y},${c.z}`, c);
   const areas = L.layerGroup();
   const markers = L.layerGroup();
   const shown = features.filter((f) => enabled.has(f.kind));
@@ -628,7 +654,7 @@ function poiLayers(features, spawn, enabled) {
       fillOpacity: 0.95,
     });
     m.bindTooltip(esc(f.name), { sticky: true });
-    m.bindPopup(() => poiPopup(f, spawn), { maxWidth: 340 });
+    m.bindPopup(() => poiPopup(f, spawn, chestAt), { maxWidth: 340 });
     g.addLayer(m);
   }
   return { areas, markers };
@@ -643,12 +669,33 @@ function poiColour(kind) {
   return `hsl(${h % 360}, 62%, 66%)`;
 }
 
-function poiPopup(f, spawn) {
+function poiPopup(f, spawn, chestAt) {
   let h = `<div class="pop"><h3 style="color:${poiColour(f.kind)}">${esc(f.name)}</h3>`;
   h += `<div class="kv">${dist(f.x, f.z, spawn)} blocks from spawn</div>`;
   const about = POI_KIND[f.kind]?.about;
   if (about) h += `<div class="kv">${esc(about)}</div>`;
 
+  const c = POI_IS_CHEST.has(f.kind) && chestAt && chestAt.get(`${f.x},${f.y},${f.z}`);
+  if (c) {
+    h += `<div class="kv">${c.val.toLocaleString()} pts &middot; ${c.items.length} stacks</div>`;
+    h += tpRaw(c.tp, 'chest');
+    h += '<div class="kv">Contents</div><ul class="items">';
+    for (const i of c.items) {
+      h += `<li>${esc(i.n)} &times;${i.c}${i.v ? ` &middot; ${(i.v * i.c).toLocaleString()} pts` : ''}</li>`;
+    }
+    h += '</ul></div>';
+    return h;
+  }
+
+  if (f.site && f.dungeon) {
+    const d = f.dungeon;
+    h += `<div class="warn">This is the structure. It does not exist until the TRIGGER chunk ` +
+      `populates — go there first.</div>`;
+    h += tpLine(d.x, 100, d.z, 'trigger, go here first');
+    h += tpLine(f.x, f.y, f.z, 'structure');
+    h += `<div class="kv">${d.n_chests} chests</div>`;
+    return h + '</div>';
+  }
   if (f.dungeon && f.kind.startsWith('dungeon-')) {
     const d = f.dungeon;
     h += `<div class="warn">Go to the trigger first. The dungeon does not exist until this ` +

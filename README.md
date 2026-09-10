@@ -328,8 +328,8 @@ empty list:
 
 | | base renders | veins | loot | POIs | climate |
 |---|---|---|---|---|---|
-| Overworld | Blocks, Biome, Topo | 1256 | 1044 chests | villages, dungeons, strongholds, witchery, squares | yes |
-| Nether | Blocks | 1252 | — | — | yes |
+| Overworld | Blocks, Biome, Topo | 1256 | 1729 chests | villages, roguelike + vanilla dungeons, strongholds, witchery, Thaumcraft hilltops/barrows | yes |
+| Nether | Blocks | 1263 | — | — | yes |
 | Twilight Forest | Blocks, Biome, Topo | 1220 | — | 256 named structures | yes |
 
 - **Base** — up to three renders, all at 1 px per block. *Blocks* is the default
@@ -347,16 +347,20 @@ empty list:
   current bundle has none — route instability was a property of the generating
   jar and has been fixed upstream — but the mechanism stays, because it is a
   claim about a *bundle*, not about the map.
-- **Loot** — by chest (sized and coloured by value) or by item, where picking
-  an item lights up every chest containing it. Chest popups carry the
-  exporter's own `/tp`, which is not the chest's raw coordinates: for an exact
-  chest it targets the block above, and for a nominal or sky chest it targets
-  y 200 to fly down from.
+- **Loot** — by chest (sized and coloured by value) or by item, where picking an
+  item lights up every chest containing it. In the item list the number is the
+  total quantity in the world, not the stack or chest count, since that is what
+  "how much of this is out there" means; the hover gives the chest count, which
+  is what actually lights up. Within a chest, stacks are sorted by value, so the
+  prize is the first line rather than buried under the gravel. Chest popups carry
+  the exporter's own `/tp`, which is not the chest's raw coordinates: for an
+  exact chest it targets the block above, and for a nominal or sky chest it
+  targets y 200 to fly down from.
 - **POIs** — villages with their piece boxes, roguelike dungeon *triggers*,
-  enchanting tables, strongholds, witchery cells by winning handler, and the
-  no-rain and humid biome squares. A roguelike dungeon does not exist until its
-  trigger chunk populates, so the trigger is a prerequisite and the popup says
-  so.
+  enchanting tables, strongholds, witchery cells by winning handler, Thaumcraft
+  hilltop circles and barrows, and the no-rain and humid biome squares. A
+  roguelike dungeon does not exist until its trigger chunk populates, so the
+  trigger is a prerequisite and the popup says so.
 - **Climate** — the *actual* no-rain and high-humidity regions, per block, from
   the same biome grid as the Blocks layer. Worth turning on before trusting the
   dashed POI squares: those are the largest **axis-aligned squares** the stage-0
