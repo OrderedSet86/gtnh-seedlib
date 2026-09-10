@@ -422,12 +422,10 @@ function buildLootControls() {
     return;
   }
 
+  // Step 1 on both controls so they can express the same values. A coarse slider step would
+  // silently round whatever you typed in the box to the nearest notch.
   const maxVal = l.chests.length ? l.chests[0].val : 0;
-  const slider = $('lootmin');
-  slider.max = maxVal;
-  slider.step = Math.max(1, Math.round(maxVal / 200));
-  slider.value = state.loot.minVal;
-  $('lootminv').textContent = Number(state.loot.minVal).toLocaleString();
+  setMinValue(state.loot.minVal, maxVal);
 
   checkList(
     $('srcList'),
@@ -436,6 +434,21 @@ function buildLootControls() {
     drawLoot
   );
   buildItemList();
+}
+
+/** Single writer for the min-chest-value filter, keeping slider and box in step. */
+function setMinValue(v, max, echo = true) {
+  const slider = $('lootmin');
+  if (max != null) {
+    slider.max = max;
+    $('lootminv').max = max;
+  }
+  const lim = Number(slider.max) || 0;
+  const val = Math.max(0, Math.min(Math.round(Number(v) || 0), lim));
+  state.loot.minVal = val;
+  slider.value = val;
+  if (echo) $('lootminv').value = val;
+  drawLoot();
 }
 
 function buildItemList() {
@@ -652,11 +665,15 @@ function bindChrome() {
     };
   }
 
-  $('lootmin').oninput = (e) => {
-    state.loot.minVal = Number(e.target.value);
-    $('lootminv').textContent = state.loot.minVal.toLocaleString();
-    drawLoot();
+  // Slider and number box are two views of one value; each writes through to the other.
+  $('lootmin').oninput = (e) => setMinValue(Number(e.target.value));
+  $('lootminv').oninput = (e) => {
+    // Mid-typing the box can read "" or "1e" -- filter on the usable value but do NOT rewrite
+    // the field, or the caret jumps and you cannot type a number with more than one digit.
+    setMinValue(e.target.value === '' ? 0 : Number(e.target.value), undefined, false);
   };
+  // On commit, normalise what is displayed to what is actually in effect (clamped, no "007").
+  $('lootminv').onchange = () => setMinValue(state.loot.minVal);
   $('itemsearch').oninput = (e) => {
     state.loot.search = e.target.value;
     buildItemList();
