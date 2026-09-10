@@ -1257,5 +1257,5 @@
 {"ore":"oilsand","layer":"ore.mix.oilsand","x":-601,"z":738,"y":53,"b":[-617,721,-584,755],"d":959,"stable":true}
 ],
 "ores":{"gold":194,"iron":139,"mineralsand":119,"copper":94,"garnettin":92,"apatite":88,"coal":83,"kaolinitezeolite":71,"redstone":67,"salts":55,"diamond":49,"lapis":48,"soapstone":41,"oilsand":33,"manganese":25,"mica":25,"magnetite":24,"lignite":5,"cassiterite":2,"coppertin":2},
-"has_stability":true,
+"has_stability":false,
 "unstable":0}

@@ -1221,5 +1221,5 @@
 {"ore":"perditioordo","layer":"ore.mix.perditioordo","x":1085,"z":360,"y":6,"b":[1068,351,1103,369],"d":958,"stable":true}
 ],
 "ores":{"gold":191,"magnetite":177,"iron":131,"olivine":85,"coal":78,"cassiterite":74,"apatite":63,"sapphire":59,"nickel":57,"lapis":54,"tfgalena":52,"soapstone":49,"salts":44,"diamond":39,"terraaer":23,"perditioordo":22,"aquaignis":14,"molybdenum":8},
-"has_stability":true,
+"has_stability":false,
 "unstable":0}

@@ -205,6 +205,57 @@ def pois_from_prefilter(rec: dict) -> dict:
     return out
 
 
+TRACE_CHEST = re.compile(r"\[chesttrace\] seed=(-?\d+) .*?abs=(-?\d+),(-?\d+),(-?\d+).*?caller=(\S+)")
+TRACE_MOUND = re.compile(r"\[moundtrace\] seed=(-?\d+) x=(-?\d+) y=(-?\d+) z=(-?\d+)")
+TRACE_DUNGEON = re.compile(r"\[dungeonattempt\] seed=(-?\d+) x=(-?\d+) y=(-?\d+) z=(-?\d+) built=true")
+
+
+def pois_from_trace(path: Path, seed: int) -> dict:
+    """Structures stage 0 cannot predict, read from a full-generation probe log.
+
+    `chest-sites.json` carries two Thaumcraft VILLAGE components and nothing else, so hilltop stone
+    circles and barrows have no stage-0 representation at all; vanilla `WorldGenDungeons` rooms have
+    never been stage-0 computable because the prefilter does not enumerate room positions. All three
+    became seed-stable in gtnhdeterminism 0.11, which is what makes them worth mapping — before that
+    their positions were a function of the player's route.
+
+    Coordinates are observed, not predicted, so Y is exact. Filter on the seed each line carries: a
+    warm batch writes every seed to one log and boots its own world on level-seed=1 first.
+    """
+    hill: list[tuple] = []
+    barrow: list[tuple] = []
+    dungeon: list[tuple] = []
+    seen: set = set()
+    for line in open(path, errors="replace"):
+        m = TRACE_CHEST.search(line)
+        if m and int(m.group(1)) == seed and "WorldGenHilltopStones" in m.group(5):
+            p = (int(m.group(2)), int(m.group(3)), int(m.group(4)))
+            if ("h", p) not in seen:
+                seen.add(("h", p))
+                hill.append(p)
+            continue
+        m = TRACE_MOUND.search(line)
+        if m and int(m.group(1)) == seed:
+            barrow.append((int(m.group(2)), int(m.group(3)), int(m.group(4))))
+            continue
+        m = TRACE_DUNGEON.search(line)
+        if m and int(m.group(1)) == seed:
+            p = (int(m.group(2)), int(m.group(3)), int(m.group(4)))
+            if ("d", p) not in seen:
+                seen.add(("d", p))
+                dungeon.append(p)
+    def rows(pts, label, ynote):
+        return [{"i": i, "name": f"{label} {i}", "x": x, "y": y, "z": z,
+                 "tp": f"/tp {x} {y + 1} {z}", "yconf": ynote}
+                for i, (x, y, z) in enumerate(sorted(pts), 1)]
+    return {
+        # The circle's chest sits two above the mob spawner, on the obsidian pedestal at its centre.
+        "hilltops": rows(hill, "Hilltop Circle", "exact"),
+        "barrows": rows(barrow, "Barrow", "exact"),
+        "vanilla_dungeons": rows(dungeon, "Dungeon", "exact"),
+    }
+
+
 def pois_from_tffeatures(report: dict) -> dict:
     """TF structures from the probe's `tffeatures` section.
 
@@ -872,6 +923,10 @@ def main() -> None:
     ap.add_argument("--seed", type=int, required=True)
     ap.add_argument("--pack", default="daily-707")
     ap.add_argument("--prefilter", type=Path)
+    ap.add_argument("--trace", type=Path,
+                    help="full-generation probe log with chesttrace/moundtrace/dungeontrace lines; "
+                         "adds the POI kinds stage 0 cannot predict (Thaumcraft hilltop circles and "
+                         "barrows, vanilla WorldGenDungeons rooms)")
     ap.add_argument("--loot-csv", type=Path)
     ap.add_argument("--veins-ow", type=Path)
     ap.add_argument("--veins-tf", type=Path)
@@ -931,6 +986,14 @@ def main() -> None:
             f"{len(pois['witchery'])} witchery cells, {len(pois['strongholds'])} strongholds, "
             f"{len(pois['squares'])} squares"
         )
+
+    if args.trace:
+        fg = pois_from_trace(Path(args.trace), args.seed)
+        pf = json.loads((out / "dim0" / "pois.json").read_text()) if (out / "dim0" / "pois.json").exists() else {}
+        pf.update(fg)
+        _write(out / "dim0" / "pois.json", pf)
+        log(f"fullgen pois: {len(fg['hilltops'])} hilltop circles, {len(fg['barrows'])} barrows, "
+            f"{len(fg['vanilla_dungeons'])} vanilla dungeons")
 
     if args.loot_csv:
         loot = loot_from_csv(args.loot_csv)

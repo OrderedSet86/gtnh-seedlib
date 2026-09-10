@@ -357,6 +357,36 @@ const POI_KINDS = [
   { key: 'enchant-table', label: 'Enchanting table', colour: '#b98cff' },
   { key: 'stronghold', label: 'Stronghold', colour: '#8fd4ff' },
   {
+    key: 'hilltop-circle',
+    label: 'Thaumcraft hilltop circle',
+    colour: '#c86bff',
+    about:
+      'A ring of obsidian totems on high ground, with a single chest on a one-block pedestal at ' +
+      'the centre, a mob spawner directly under it and an aura node three above. Loot rolls the ' +
+      'dungeonChest table twice, so it is roughly double a vanilla dungeon chest. Observed from a ' +
+      'full-generation run, not predicted: stage 0 has no entry for Thaumcraft outer-world ' +
+      'structures, so these appear on the map only because the world was generated.',
+  },
+  {
+    key: 'barrow',
+    label: 'Thaumcraft barrow',
+    colour: '#a8763f',
+    about:
+      'A burial mound with crates, urns and a chest. Same provenance as hilltop circles — ' +
+      'observed, not predicted. This seed has none inside the mapped radius.',
+  },
+  {
+    key: 'vanilla-dungeon',
+    label: 'Vanilla dungeon',
+    colour: '#8a8a8a',
+    off: true,
+    about:
+      'A mossy-cobble spawner room with one or two chests. Numerous — several hundred in this ' +
+      'radius — so it is off by default to keep the map readable. Existence became a pure ' +
+      'function of the seed in gtnhdeterminism 0.11; before that it depended on the route the ' +
+      'player took.',
+  },
+  {
     key: 'witchery-Coven',
     label: 'Coven circle',
     colour: '#ff5cc8',
@@ -465,6 +495,15 @@ function poiFeatures(pois) {
         z: e[2],
         dungeon: d,
       });
+    }
+  }
+  for (const [arr, kind, label] of [
+    [pois.hilltops, 'hilltop-circle', 'Hilltop circle'],
+    [pois.barrows, 'barrow', 'Barrow'],
+    [pois.vanilla_dungeons, 'vanilla-dungeon', 'Dungeon'],
+  ]) {
+    for (const p of arr || []) {
+      out.push({ kind, name: p.name || label, x: p.x, y: p.y, z: p.z, poi: p });
     }
   }
   for (const w of pois.witchery || []) {
