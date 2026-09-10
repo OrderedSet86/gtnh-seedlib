@@ -27,7 +27,7 @@ const state = {
   // `unstable` off by default: those veins differed between two walks of the same seed, so
   // showing them by default puts coordinates on the map that may not be there.
   veins: { on: true, ores: new Set(), unstable: false, maxDist: 1600 },
-  loot: { mode: 'chest', sources: new Set(), minVal: 0, items: new Set(), search: '' },
+  loot: { mode: 'chest', sources: new Set(), minVal: 0, items: new Set(), search: '', matches: [] },
   pois: new Set(),
   userMoved: false, // set once the view is the user's, not ours
   climate: false,
@@ -448,12 +448,14 @@ function buildItemList() {
   // has such items — renamed sticks called "0".."7", lore "Weak signal logic unit", found in droppers
   // — and they were displacing eight genuine entries from the default view.
   const byQty = Object.keys(l.items).sort((a, b) => (l.items[b] || 0) - (l.items[a] || 0));
-  // Always show what is already selected, so a filter cannot hide an active choice.
-  let names = byQty.filter(
-    (n) => state.loot.items.has(n) || (q && n.toLowerCase().includes(q))
-  );
-  if (!q) names = names.concat(byQty.slice(0, 40));
-  names = [...new Set(names)].slice(0, 200);
+  // No cap. A search for "ingot" means all 31 ingots and browsing means all 854 items: the
+  // list is a scroll box, so showing everything costs only DOM nodes, and 854 rows is nothing.
+  // A truncated list is worse than a long one -- it looks complete while hiding the entry you
+  // were looking for, with nothing on screen to say so.
+  // Selected items are prepended, so a search can never hide an active choice.
+  const matches = byQty.filter((n) => !q || n.toLowerCase().includes(q));
+  const names = [...new Set([...byQty.filter((n) => state.loot.items.has(n)), ...matches])];
+  state.loot.matches = matches; // what "Select all" acts on
 
   // The number is the total quantity in the world; the hover says how many chests that is
   // spread across, which is what actually lights up on the map.
@@ -471,6 +473,13 @@ function buildItemList() {
     drawLoot,
     { empty: 'No match.' }
   );
+
+  const sel = state.loot.items.size;
+  $('itemcount').textContent =
+    (q ? `${matches.length.toLocaleString()} matching "${q}"` : `${matches.length.toLocaleString()} items`) +
+    (sel ? ` · ${sel.toLocaleString()} selected` : '');
+  $('itemall').textContent = q ? `Select all ${matches.length.toLocaleString()} matching` : 'Select all';
+  $('itemall').disabled = !matches.length;
 }
 
 function buildPoiList() {
@@ -651,6 +660,12 @@ function bindChrome() {
   $('itemsearch').oninput = (e) => {
     state.loot.search = e.target.value;
     buildItemList();
+  };
+  $('itemall').onclick = () => {
+    // Acts on the current search, which is the point: "all ingots" is a search plus this.
+    for (const n of state.loot.matches || []) state.loot.items.add(n);
+    buildItemList();
+    drawLoot();
   };
   $('itemclear').onclick = () => {
     state.loot.items.clear();

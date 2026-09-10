@@ -142,6 +142,9 @@ input[type=search] {
 }
 
 .list { max-height: 230px; overflow-y: auto; margin-top: 4px; }
+/* The item list is the only one that can run to hundreds of rows, so it gets more of the
+   window rather than making every other list taller too. */
+#itemList { max-height: 45vh; }
 .list::-webkit-scrollbar { width: 8px; }
 .list::-webkit-scrollbar-thumb { background: #39414d; border-radius: 4px; }
 
