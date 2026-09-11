@@ -4,6 +4,36 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GTNH route map</title>
+
+<!-- Link preview card (Discord, Slack, Twitter, iMessage).
+     Every one of these unfurlers fetches this page with a plain HTTP client and reads the tags
+     below. None of them run JavaScript, so map.js never executes for them and the <title> it
+     sets per seed is never seen: what ships here is the whole preview. That also means the card
+     is the same for every ?world= -- a per-seed card needs a per-seed HTML file.
+
+     og:image MUST be absolute. A relative path is the single most common reason a card comes up
+     as a bare text link; Discord does not resolve it against the page URL.
+
+     Discord caches an unfurl for hours and keys the cache on the *image URL*, so replacing
+     preview.jpg in place will not refresh an already-posted link. Bump the ?v= below when the
+     card changes. -->
+<meta name="description" content="Interactive Greg Tech: New Horizons world map: ore veins, chest loot by value, and points of interest across the Overworld, Nether and Twilight Forest.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="gtnh-seedlib">
+<meta property="og:url" content="https://orderedset86.github.io/gtnh-seedlib/routemap/">
+<meta property="og:title" content="GTNH Route Map">
+<meta property="og:description" content="Interactive Greg Tech: New Horizons world map: ore veins, chest loot by value, and points of interest across the Overworld, Nether and Twilight Forest.">
+<meta property="og:image" content="https://orderedset86.github.io/gtnh-seedlib/routemap/preview.jpg?v=1">
+<meta property="og:image:type" content="image/jpeg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Block-level render of the GTNH overworld showing mesa, plains, desert and river biomes.">
+<!-- Without this, Twitter and a few others fall back to the small square thumbnail. Discord
+     shows the large card off og:image alone, but the tag is harmless there. -->
+<meta name="twitter:card" content="summary_large_image">
+<!-- Discord tints the embed's left-hand accent stripe with theme-color. -->
+<meta name="theme-color" content="#7fb2ff">
+
 <link rel="stylesheet" href="vendor/leaflet.css">
 <link rel="stylesheet" href="style.css?v=2">
 </head>

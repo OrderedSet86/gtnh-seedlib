@@ -64,14 +64,34 @@ jobs:
           # special.
           touch _site/.nojekyll
           # The app lives at /routemap/; send the site root there so the published URL works.
+          #
+          # The Open Graph tags are duplicated from routemap/index.html rather than left to the
+          # redirect, because link unfurlers do not follow a meta-refresh -- Discord reads the
+          # tags on whatever it fetched and stops. Without them the bare site URL, which is the
+          # one people actually paste, unfurls as a plain link while the /routemap/ URL unfurls
+          # with a card.
           cat > _site/index.html <<'HTML'
           <!DOCTYPE html>
           <meta charset="utf-8">
           <title>GTNH route map</title>
           <meta http-equiv="refresh" content="0; url=routemap/">
           <link rel="canonical" href="routemap/">
+          <meta property="og:type" content="website">
+          <meta property="og:site_name" content="gtnh-seedlib">
+          <meta property="og:url" content="https://orderedset86.github.io/gtnh-seedlib/routemap/">
+          <meta property="og:title" content="GTNH Route Map">
+          <meta property="og:description" content="Interactive Greg Tech: New Horizons world map: ore veins, chest loot by value, and points of interest across the Overworld, Nether and Twilight Forest.">
+          <meta property="og:image" content="https://orderedset86.github.io/gtnh-seedlib/routemap/preview.jpg?v=1">
+          <meta property="og:image:type" content="image/jpeg">
+          <meta property="og:image:width" content="1200">
+          <meta property="og:image:height" content="630">
+          <meta name="twitter:card" content="summary_large_image">
+          <meta name="theme-color" content="#7fb2ff">
           <p><a href="routemap/">GTNH route map</a></p>
           HTML
+          # The card is the only thing most people see before clicking; shipping the site without
+          # it is a silent downgrade to a bare text link.
+          test -s _site/routemap/preview.jpg || { echo "::error::routemap/preview.jpg missing"; exit 1; }
           du -sh _site
 
       - uses: actions/configure-pages@v5

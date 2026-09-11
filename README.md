@@ -42,6 +42,7 @@ routemap/                                # static Leaflet world map (see "Route 
 tools/
   build_world_bundle.py                  # bakes a worlds/<seed>/ bundle from analysis outputs
   worldrender.py                         #   reads Anvil region files -> true block-surface PNG
+  make_preview.py                        # bakes routemap/preview.jpg, the link-unfurl card
 ```
 
 Each tarball extracts flat:
@@ -321,6 +322,32 @@ The workflow checks out with `lfs: false` and then runs
 object in the repo — about 264 MB, nearly all of it seed-corpus tarballs the site
 never serves — instead of the ~13 MB it publishes. It then hard-fails if the
 rasters still look like pointer files, rather than publishing a blank map.
+
+### Link preview card
+
+Pasting the site URL into Discord, Slack or Twitter unfurls a 1200×630 card
+showing the overworld render. It comes from the Open Graph `<meta>` tags in
+`routemap/index.html` and the image at `routemap/preview.jpg`, regenerated with:
+
+```
+python3 tools/make_preview.py worlds/<seed>
+```
+
+Three things about it are easy to get wrong:
+
+- **`og:image` must be an absolute URL.** A relative path is the usual reason a
+  card degrades to a bare text link; no unfurler resolves it against the page.
+- **The tags are also duplicated into the site-root redirect** that the workflow
+  writes. Unfurlers do not follow a `meta refresh` — they read whatever they
+  fetched and stop — so without them the bare `…github.io/gtnh-seedlib/` URL,
+  which is the one people paste, would unfurl blank while `/routemap/` did not.
+- **Discord caches an unfurl for hours, keyed on the image URL.** Replacing
+  `preview.jpg` in place will not refresh a link that was already posted; bump
+  the `?v=` on `og:image` in both copies of the tags.
+
+The card is static, so it is identical for every `?world=` — a per-seed card
+would need a per-seed HTML file. The tags also cannot describe the map state in
+a deep link, since none of these crawlers run JavaScript.
 
 Layers, all toggleable, per dimension. A dimension only carries the layers its
 bundle was actually built with, and the panel says so rather than showing an
