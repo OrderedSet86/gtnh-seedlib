@@ -447,9 +447,15 @@ two GTNH extensions — `Biomes16v2`, 256 little-endian u16 per chunk because th
 pack has biome ids past 255 (vanilla's 8-bit `Biomes` is absent), and
 `Data1High`/`Data2` for extended block metadata. Block ids are resolved to
 registry names through the FML table in `level.dat`, then coloured. Coverage is
-99.1% (Overworld) and 99.2% (Twilight Forest) of visible surface blocks — the
-build prints the figure and names the top misses, so extending `BLOCKS` is a
-matter of reading that line. Vegetation, lily pads and Twilight Forest's wispy
+99.9% of visible surface blocks in every dimension — the build prints the figure
+and names the top misses, so extending `BLOCKS` is a matter of reading that line.
+Two things make that line worth watching: a block with no entry falls back to its
+biome colour, which looks like terrain rather than like a gap (Thaumcraft hilltop
+circles rendered as pale rings on desert for exactly this reason), and the Nether
+sat at 81% until its blocks were added, with `BiomesOPlenty:flesh` alone
+accounting for 426k columns. Colours are the mean of each block's own texture in
+the mod jar, not invented; a greyscale texture means the game tints it, so it
+takes the foliage tint instead of a fixed value. Vegetation, lily pads and Twilight Forest's wispy
 clouds are in `SKIP` and are seen past, the way a map shows the ground under
 grass; leaves are deliberately not, since a canopy is what makes a forest
 legible.

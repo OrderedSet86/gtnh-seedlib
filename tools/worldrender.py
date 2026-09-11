@@ -185,13 +185,10 @@ SKIP = {
     "minecraft:fire",
     "minecraft:web",
     "TwilightForest:tile.TFPlant",
-    "TwilightForest:tile.TFTorchberries",
     "Thaumcraft:blockCustomPlant",
     "Natura:florasapling",
-    "harvestcraft:pamCrop",
     "etfuturum:lily_of_the_valley",
     "etfuturum:cornflower",
-    "witchery:plant",
     # BoP ground cover is the single most common surface block in this world (355k columns);
     # rendering it would paint most of the overworld one flat green.
     "BiomesOPlenty:foliage",
@@ -201,7 +198,35 @@ SKIP = {
     "minecraft:waterlily",
     "TwilightForest:tile.HugeLilyPad",
     "TwilightForest:tile.WispyCloud",
-    "TwilightForest:tile.HugeGrassBlock",
+    "TwilightForest:tile.FluffyCloud",
+    "TwilightForest:tile.ForceField",
+    # Natura's cloud layers float above the Nether floor; without this they white out 67k
+    # columns of it, which is what kept that dimension's coverage down more than any one block.
+    "Natura:Cloud",
+    "Natura:greenGlowshroom",
+    "Natura:blueGlowshroom",
+    "Natura:purpleGlowshroom",
+    "Natura:NetherBerryBush",
+    "Natura:BerryBush",
+    "BiomesOPlenty:flowers",
+    "BiomesOPlenty:flowers2",
+    "BiomesOPlenty:mushrooms",
+    "BiomesOPlenty:flowerVine",
+    "BiomesOPlenty:coral2",
+    "etfuturum:sweet_berry_bush",
+    "etfuturum:leaves",
+    "fether:nether_garden",
+    "fether:glow_flower",
+    "Thaumcraft:blockAiry",
+    "harvestcraft:stalkgarden",
+    "harvestcraft:gourdgarden",
+    "harvestcraft:berrygarden",
+    "harvestcraft:mushroomgarden",
+    "harvestcraft:desertgarden",
+    "harvestcraft:leafygarden",
+    "harvestcraft:herbgarden",
+    "harvestcraft:grassgarden",
+    "harvestcraft:tropicalgarden",
 }
 
 # name -> (r, g, b) or (r, g, b, tint). tint "g" takes the biome colour (grass, ground cover),
@@ -209,6 +234,12 @@ SKIP = {
 # biome colour, so an unknown modded block still reads as terrain rather than as a hole.
 BLOCKS: dict[str, tuple] = {
     # --- ground
+    # AE2 meteorites. A BLOCK_META entry ALONE does nothing: build_lookup does `BLOCKS.get(name)`
+    # and `continue`s when it misses, so the block stays unknown and falls back to the biome colour.
+    # Sky stone was added to BLOCK_META only at first and a crater rendered as bright grass.
+    # Default here is raw sky stone (the meteorite body); BLOCK_META refines the worked subtypes.
+    "appliedenergistics2:tile.BlockSkyStone": (27, 28, 28),
+    "appliedenergistics2:tile.BlockSkyChest": (60, 60, 62),
     "minecraft:grass": (0, 0, 0, "g"),
     "minecraft:mycelium": (126, 108, 121),
     "minecraft:dirt": (134, 96, 67),
@@ -257,10 +288,8 @@ BLOCKS: dict[str, tuple] = {
     "minecraft:glass": (208, 226, 232),
     "minecraft:glowstone": (219, 191, 122),
     "minecraft:wool": (222, 222, 222),
-    "minecraft:gravel_road": (130, 124, 120),
     # --- Twilight Forest
     "TwilightForest:tile.TFLeaves": (0, 0, 0, "f"),
-    "TwilightForest:tile.TFLeaves2": (0, 0, 0, "f"),
     "TwilightForest:tile.TFLeaves3": (0, 0, 0, "f"),
     "TwilightForest:tile.TFHedge": (52, 92, 44),
     "TwilightForest:tile.TFLog": (98, 76, 46),
@@ -280,8 +309,6 @@ BLOCKS: dict[str, tuple] = {
     "TwilightForest:tile.TFNagastoneStairsWeatheredRight": (128, 128, 120),
     "TwilightForest:tile.TFAuroraBrick": (110, 168, 200),
     "TwilightForest:tile.TFDeadrock": (86, 86, 90),
-    "TwilightForest:tile.TFTrollSteinn": (96, 108, 118),
-    "TwilightForest:tile.TFCastleBrick": (196, 196, 190),
     "TwilightForest:tile.TFThorns": (86, 70, 52),
     # --- other mods that reach the surface
     "Thaumcraft:blockMagicalLeaves": (0, 0, 0, "f"),
@@ -290,8 +317,6 @@ BLOCKS: dict[str, tuple] = {
     "IC2:blockRubLeaves": (0, 0, 0, "f"),
     "IC2:blockRubWood": (98, 80, 50),
     "Natura:tree": (98, 80, 50),
-    "Natura:floraLeaves": (0, 0, 0, "f"),
-    "Natura:floraLeavesNoColor": (0, 0, 0, "f"),
     "BiomesOPlenty:leaves1": (0, 0, 0, "f"),
     "BiomesOPlenty:leaves2": (0, 0, 0, "f"),
     "BiomesOPlenty:leaves3": (0, 0, 0, "f"),
@@ -313,11 +338,49 @@ BLOCKS: dict[str, tuple] = {
     "TwilightForest:tile.CastleBrick": (196, 196, 190),
     "TwilightForest:tile.GiantCobble": (120, 120, 120),
     "etfuturum:coarse_dirt": (122, 88, 62),
-    "witchery:leaves": (0, 0, 0, "f"),
-    "erebus:leaves": (0, 0, 0, "f"),
     # Metadata-coloured blocks still need a base entry or they count as unpalettised; the
     # per-meta table below overrides the value.
+    # --- Nether. Its coverage was 81% before these: BiomesOPlenty:flesh alone is 426k columns,
+    # and without an entry the whole dimension fell back to biome colour.
+    "BiomesOPlenty:flesh": (167, 63, 60),
+    "BiomesOPlenty:hell_blood": (183, 39, 19),
+    "BiomesOPlenty:bopGrass": (110, 106, 49),      # overgrown netherrack
+    "BiomesOPlenty:hive": (200, 175, 105),
+    "BiomesOPlenty:bones": (238, 236, 201),
+    "BiomesOPlenty:grave": (104, 104, 104),
+    "fether:nether_leaves": (77, 53, 60),
+    "minecraft:nether_brick": (45, 23, 27),        # fortresses
+    "minecraft:nether_brick_fence": (45, 23, 27),
+    "minecraft:nether_brick_stairs": (45, 23, 27),
+    "minecraft:quartz_ore": (125, 85, 80),
+    "Natura:Dark Leaves": (8, 15, 36),
+    "Natura:Saguaro": (100, 140, 18),
+    # No texture ships under a matching name for these two; values are the block's in-game tone.
+    "etfuturum:magma": (155, 63, 28),
+    "etfuturum:grass_path": (148, 119, 73),
+    # A GREYSCALE texture means the game tints it -- these are leaves, not grey blocks.
+    "BiomesOPlenty:willow": (0, 0, 0, "f"),
+    "Natura:floraleavesnocolor": (0, 0, 0, "f"),
+    # --- structures and odds and ends
+    "TConstruct:slime.grass": (0, 196, 199),
+    "TConstruct:slime.leaves": (0, 0, 0, "f"),
+    "TConstruct:SearedBrick": (60, 55, 55),
+    "TwilightForest:tile.UberousSoil": (77, 46, 16),
+    "TwilightForest:tile.TrollSteinn": (75, 71, 74),
+    "TwilightForest:tile.CastleMagic": (200, 200, 205),
+    "TwilightForest:tile.GiantLog": (98, 76, 46),
+    "Railcraft:cube": (83, 83, 98),
+    "Forestry:stairs": (157, 128, 79),
+    "BiomesOPlenty:jacarandaStairs": (157, 128, 79),
+    "minecraft:dark_oak_stairs": (70, 48, 25),
+    "minecraft:double_wooden_slab": (157, 128, 79),
+    # GT ore blocks reaching the surface. Deliberately plain stone: the vein overlay is how you
+    # find ore, and colouring these would put a second, partial ore signal on the same map.
+    "gregtech:gt.blockores2": (122, 122, 124),
+    "gregtech:gt.blockgranites": (128, 120, 118),
+    "gregtech:gt.blockstones": (124, 124, 124),
     "minecraft:stained_hardened_clay": (150, 92, 66),
+    "Thaumcraft:blockCosmeticSolid": (24, 19, 35),
     "minecraft:wool": (222, 222, 222),
     "minecraft:wooden_slab": (161, 131, 82),
     "minecraft:fence": (150, 122, 76),
@@ -350,6 +413,48 @@ BLOCK_META: dict[str, dict[int, tuple]] = {
     },
     "minecraft:log": {
         0: (105, 84, 51), 1: (60, 41, 22), 2: (200, 195, 180), 3: (105, 84, 51),
+    },
+    # Thaumcraft packs sixteen unrelated blocks into one id, and the two that matter here are
+    # the Obsidian Totem and Obsidian Tile that a hilltop stone circle is built from. With no
+    # entry they fell through to the biome colour, so the circles rendered as pale sand rings
+    # on the desert they stand in -- "paper with black dots", the dots being the plain
+    # minecraft:obsidian of the same structure, which did have a colour.
+    #
+    # Values are the mean of each subtype's own texture in Thaumcraft-1.7.10-4.2.3.5.jar, taken
+    # from the face seen from above. Only 0, 1 and 8 occur at the surface in this world.
+    # AE2 meteorites. Without these the crater fell through to the biome colour and a meteorite
+    # rendered as the grass it had just destroyed -- the same failure as the Thaumcraft circles
+    # below, reported twice from the map before it was found. Raw sky stone is the meteorite body
+    # and is nearly black, which is exactly why its absence was so visible: a large dark splash was
+    # being drawn as undisturbed terrain.
+    #
+    # Values are the mean of each subtype's own texture in appliedenergistics2-rv3-beta-1050-GTNH.jar
+    # (BlockSkyStone*.png), alpha-weighted, same method as the Thaumcraft entry.
+    "appliedenergistics2:tile.BlockSkyStone": {
+        0: (27, 28, 28),    # raw sky stone -- the meteorite itself
+        1: (72, 72, 72),    # smooth block
+        2: (71, 71, 71),    # brick
+        3: (68, 68, 68),    # small brick
+    },
+    "Thaumcraft:blockCosmeticSolid": {
+        0: (23, 16, 33),    # Obsidian Totem
+        1: (24, 19, 35),    # Obsidian Tile
+        2: (72, 74, 72),    # Paving Stone of Travel
+        3: (74, 72, 72),    # Paving Stone of Warding
+        4: (64, 52, 87),    # Thaumium Block
+        5: (241, 210, 158), # Tallow Block
+        6: (74, 74, 74),    # Arcane Stone Block
+        7: (74, 74, 74),    # Arcane Stone Bricks
+        8: (18, 13, 26),    # Charged Obsidian Totem
+        9: (72, 72, 72),    # Golem Fetter
+        10: (101, 65, 65),  # Active Golem Fetter
+        # 11-13 and 15 are the Eldritch "ancient" family; none reach the surface here, so they
+        # take the pedestal's measured grey rather than an invented per-subtype colour.
+        11: (76, 76, 76),
+        12: (76, 76, 76),
+        13: (76, 76, 76),
+        14: (100, 88, 64),  # Crusted Stone
+        15: (76, 76, 76),   # Ancient Stone Pedestal
     },
     "minecraft:wool": {
         0: (233, 236, 236), 1: (240, 118, 19), 2: (189, 68, 179), 3: (58, 175, 217),

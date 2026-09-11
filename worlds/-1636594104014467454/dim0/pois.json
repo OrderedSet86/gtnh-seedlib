@@ -467,4 +467,11 @@
 {"i":316,"name":"Dungeon 316","x":1106,"y":14,"z":-678,"tp":"/tp 1106 15 -678","yconf":"exact"},
 {"i":317,"name":"Dungeon 317","x":1111,"y":30,"z":-298,"tp":"/tp 1111 31 -298","yconf":"exact"},
 {"i":318,"name":"Dungeon 318","x":1122,"y":36,"z":-704,"tp":"/tp 1122 37 -704","yconf":"exact"}
+],
+"meteorites":[
+{"i":1,"name":"Meteorite 1","x":-463,"y":83,"z":-267,"tp":"/tp -463 84 -267","yconf":"exact"},
+{"i":2,"name":"Meteorite 2","x":458,"y":58,"z":-296,"tp":"/tp 458 59 -296","yconf":"exact"},
+{"i":3,"name":"Meteorite 3","x":576,"y":68,"z":306,"tp":"/tp 576 69 306","yconf":"exact"},
+{"i":4,"name":"Meteorite 4","x":1008,"y":68,"z":-521,"tp":"/tp 1008 69 -521","yconf":"exact"},
+{"i":5,"name":"Meteorite 5","x":1084,"y":83,"z":363,"tp":"/tp 1084 84 363","yconf":"exact"}
 ]}

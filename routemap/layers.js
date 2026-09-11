@@ -378,6 +378,14 @@ const POI_KINDS = [
       'Rolls dungeonChest twice.',
   },
   {
+    key: 'meteorite',
+    label: 'AE2 meteorite',
+    colour: '#7fe3d4',
+    about: 'Sky stone crater with a chest of AE2 presses -- Calculation, Engineering, Logic, ' +
+      'Silicon. AE2 places these from a tick callable, not during worldgen, so they were missing ' +
+      'from every map before 2026-09-10.',
+  },
+  {
     key: 'barrow',
     label: 'Thaumcraft barrow',
     colour: '#a8763f',
@@ -514,6 +522,7 @@ function poiFeatures(pois) {
   }
   for (const [arr, kind, label] of [
     [pois.hilltops, 'hilltop-circle', 'Hilltop circle'],
+    [pois.meteorites, 'meteorite', 'Meteorite'],
     [pois.barrows, 'barrow', 'Barrow'],
     [pois.vanilla_dungeons, 'vanilla-dungeon', 'Dungeon'],
   ]) {
@@ -573,7 +582,7 @@ function poiFeatures(pois) {
 // vanilla-dungeon does NOT qualify, despite also being a chest structure — its POI position is the
 // attempt anchor passed to WorldGenDungeons.generate, and the chest sits offset inside the room.
 // Verified: 19/20 hilltop POIs resolve to a chest at the exact position, 0/318 dungeon POIs do.
-const POI_IS_CHEST = new Set(['hilltop-circle']);
+const POI_IS_CHEST = new Set(['hilltop-circle', 'meteorite']);
 
 function poiLayers(features, spawn, enabled, loot) {
   const chestAt = new Map();

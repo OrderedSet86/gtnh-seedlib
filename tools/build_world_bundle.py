@@ -1086,6 +1086,22 @@ def main() -> None:
         _write(out / "dim0" / "loot.json", loot)
         log(f"loot: {len(loot['chests'])} chests, {len(loot['items'])} distinct items")
 
+        # AE2 meteorites get a POI of their own rather than only a loot dot. They carry the
+        # Calculation, Engineering, Logic and Silicon presses, which gate AE2 progression outright, and
+        # they were absent from every corpus before 2026-09-10 -- AE2 queues placement on a tick
+        # callable and the probe never ticked. Sourced from the loot CSV's `source` column because
+        # meteorites never reach ChestGenHooks and so appear in no chesttrace.
+        met = sorted({(c["x"], c["y"], c["z"]) for c in loot["chests"] if c.get("src") == "meteorite"})
+        if met:
+            pf = json.loads((out / "dim0" / "pois.json").read_text()) if (out / "dim0" / "pois.json").exists() else {}
+            pf["meteorites"] = [
+                {"i": i, "name": f"Meteorite {i}", "x": x, "y": y, "z": z,
+                 "tp": f"/tp {x} {y + 1} {z}", "yconf": "exact"}
+                for i, (x, y, z) in enumerate(met, 1)
+            ]
+            _write(out / "dim0" / "pois.json", pf)
+            log(f"meteorite pois: {len(met)}")
+
     for dim, path in ((0, args.veins_ow), (7, args.veins_tf), (-1, args.veins_nether)):
         if not path:
             continue
